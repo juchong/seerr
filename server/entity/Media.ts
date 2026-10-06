@@ -29,6 +29,7 @@ import {
 } from 'typeorm';
 import Issue from './Issue';
 import { MediaRequest } from './MediaRequest';
+import PlexServerItem from './PlexServerItem';
 import Season from './Season';
 
 @Entity()
@@ -153,6 +154,12 @@ class Media {
     eager: true,
   })
   public seasons: Season[];
+
+  @OneToMany(() => PlexServerItem, (item) => item.media, {
+    cascade: true,
+    eager: true,
+  })
+  public plexServerItems: PlexServerItem[];
 
   @OneToMany(() => Issue, (issue) => issue.media, { cascade: true })
   public issues: Issue[];

@@ -44,6 +44,18 @@ export interface PlexSettings {
   webAppUrl?: string;
 }
 
+/** Id of the Plex server stored in `plex`; additional servers use 2 and up. */
+export const PRIMARY_PLEX_SERVER_ID = 1;
+
+export interface PlexServerSettings extends PlexSettings {
+  id: number;
+  /**
+   * plex.tv token of the server's owner. Unset for the primary server, which
+   * uses the admin's token.
+   */
+  ownerToken?: string;
+}
+
 export interface JellyfinSettings {
   name: string;
   ip: string;
@@ -381,6 +393,7 @@ export interface AllSettings {
   vapidPrivate: string;
   main: MainSettings;
   plex: PlexSettings;
+  plexServers: PlexServerSettings[];
   jellyfin: JellyfinSettings;
   tautulli: TautulliSettings;
   radarr: RadarrSettings[];
@@ -444,6 +457,7 @@ class Settings {
         useSsl: false,
         libraries: [],
       },
+      plexServers: [],
       jellyfin: {
         name: '',
         ip: '',
@@ -657,6 +671,23 @@ class Settings {
 
   set plex(data: PlexSettings) {
     this.data.plex = mergeSettings(this.data.plex, data);
+  }
+
+  /** Additional Plex servers; the primary server is `plex`. */
+  get plexServers(): PlexServerSettings[] {
+    return this.data.plexServers;
+  }
+
+  set plexServers(data: PlexServerSettings[]) {
+    this.data.plexServers = data;
+  }
+
+  /** The primary server (id 1) followed by the additional ones. */
+  get allPlexServers(): PlexServerSettings[] {
+    return [
+      { ...this.data.plex, id: PRIMARY_PLEX_SERVER_ID },
+      ...this.data.plexServers,
+    ];
   }
 
   get jellyfin(): JellyfinSettings {
