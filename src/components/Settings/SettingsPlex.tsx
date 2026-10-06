@@ -6,6 +6,7 @@ import PageTitle from '@app/components/Common/PageTitle';
 import SensitiveInput from '@app/components/Common/SensitiveInput';
 import LibraryItem from '@app/components/Settings/LibraryItem';
 import SettingsBadge from '@app/components/Settings/SettingsBadge';
+import SettingsPlexServers from '@app/components/Settings/SettingsPlexServers';
 import useToasts from '@app/hooks/useToasts';
 import globalMessages from '@app/i18n/globalMessages';
 import defineMessages from '@app/utils/defineMessages';
@@ -62,6 +63,7 @@ const messages = defineMessages('components.Settings', {
     "Normally, this will only be run once every 24 hours. Seerr will check your Plex server's recently added more aggressively. If this is your first time configuring Plex, a one-time full manual library scan is recommended!",
   notrunning: 'Not Running',
   currentlibrary: 'Current Library: {name}',
+  currentserver: 'Current Server: {name}',
   librariesRemaining: 'Libraries Remaining: {count}',
   startscan: 'Start Scan',
   cancelscan: 'Cancel Scan',
@@ -98,6 +100,7 @@ interface SyncStatus {
   total: number;
   currentLibrary?: Library;
   libraries: Library[];
+  currentServer?: { id: number; name: string };
 }
 
 interface PresetServerDisplay {
@@ -698,6 +701,15 @@ const SettingsPlex = ({ isSetupSettings }: SettingsPlexProps) => {
           <div className="flex w-full flex-col sm:flex-row">
             {dataSync?.running && (
               <>
+                {dataSync.currentServer && (
+                  <div className="mb-2 mr-0 flex items-center sm:mb-0 sm:mr-2">
+                    <Badge>
+                      {intl.formatMessage(messages.currentserver, {
+                        name: dataSync.currentServer.name,
+                      })}
+                    </Badge>
+                  </div>
+                )}
                 {dataSync.currentLibrary && (
                   <div className="mb-2 mr-0 flex items-center sm:mb-0 sm:mr-2">
                     <Badge>
@@ -743,6 +755,7 @@ const SettingsPlex = ({ isSetupSettings }: SettingsPlexProps) => {
           </div>
         </div>
       </div>
+      {!isSetupSettings && <SettingsPlexServers />}
       {!isSetupSettings && (
         <>
           <div className="mb-6 mt-10">

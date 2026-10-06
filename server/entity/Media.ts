@@ -13,7 +13,8 @@ import { Watchlist } from '@server/entity/Watchlist';
 import type { DownloadingItem } from '@server/lib/downloadtracker';
 import downloadTracker from '@server/lib/downloadtracker';
 import { Permission } from '@server/lib/permissions';
-import { getSettings } from '@server/lib/settings';
+import type { PlexServerSettings } from '@server/lib/settings';
+import { PRIMARY_PLEX_SERVER_ID, getSettings } from '@server/lib/settings';
 import logger from '@server/logger';
 import { DbAwareColumn, resolveDbType } from '@server/utils/DbColumnHelper';
 import { getHostname } from '@server/utils/getHostname';
@@ -240,6 +241,13 @@ class Media {
   public tautulliUrl?: string;
   public tautulliUrl4k?: string;
 
+  /** Links to this title on the additional Plex servers that have it. */
+  public additionalPlexUrls?: {
+    serverName: string;
+    mediaUrl?: string;
+    mediaUrl4k?: string;
+  }[];
+
   constructor(init?: Partial<Media>) {
     Object.assign(this, init);
   }
@@ -296,6 +304,8 @@ class Media {
           this.tautulliUrl4k = `${tautulliUrl}/info?rating_key=${this.ratingKey4k}`;
         }
       }
+
+      this.setAdditionalPlexUrls();
     } else {
       const pageName =
         getSettings().main.mediaServerType == MediaServerType.EMBY
@@ -312,6 +322,56 @@ class Media {
       }
       if (this.jellyfinMediaId4k) {
         this.mediaUrl4k = `${jellyfinHost}/web/index.html#!/${pageName}?id=${this.jellyfinMediaId4k}&context=home&serverId=${serverId}`;
+      }
+    }
+  }
+
+  // Rating keys are local to a server, so each link names the server whose
+  // key it uses. A title missing from the primary server takes its main
+  // link from the first other server that has it.
+  private setAdditionalPlexUrls(): void {
+    const settings = getSettings();
+    if (!settings.plexServers.length) {
+      return;
+    }
+
+    const webUrl = (server: PlexServerSettings, ratingKey: string) =>
+      `${server.webAppUrl || 'https://app.plex.tv/desktop'}#!/server/${
+        server.machineId
+      }/details?key=%2Flibrary%2Fmetadata%2F${ratingKey}`;
+    const iOSUrl = (server: PlexServerSettings, ratingKey: string) =>
+      `plex://preplay/?metadataKey=%2Flibrary%2Fmetadata%2F${ratingKey}&server=${server.machineId}`;
+
+    this.additionalPlexUrls = [];
+    for (const item of this.plexServerItems ?? []) {
+      const server = settings.getPlexServer(item.serverId);
+      if (item.serverId === PRIMARY_PLEX_SERVER_ID || !server?.machineId) {
+        continue;
+      }
+
+      const link: {
+        serverName: string;
+        mediaUrl?: string;
+        mediaUrl4k?: string;
+      } = { serverName: server.name };
+      if (item.ratingKey) {
+        if (this.mediaUrl) {
+          link.mediaUrl = webUrl(server, item.ratingKey);
+        } else {
+          this.mediaUrl = webUrl(server, item.ratingKey);
+          this.iOSPlexUrl = iOSUrl(server, item.ratingKey);
+        }
+      }
+      if (item.ratingKey4k) {
+        if (this.mediaUrl4k) {
+          link.mediaUrl4k = webUrl(server, item.ratingKey4k);
+        } else {
+          this.mediaUrl4k = webUrl(server, item.ratingKey4k);
+          this.iOSPlexUrl4k = iOSUrl(server, item.ratingKey4k);
+        }
+      }
+      if (link.mediaUrl || link.mediaUrl4k) {
+        this.additionalPlexUrls.push(link);
       }
     }
   }

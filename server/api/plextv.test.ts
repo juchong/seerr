@@ -459,7 +459,11 @@ describe('PlexTvAPI.getUsersWithServerAccess', () => {
 
   beforeEach(() => {
     const settings = getSettings();
-    settings.plex = { ...settings.plex, machineId: 'machine-a' };
+    settings.plex = {
+      ...settings.plex,
+      name: 'Server A',
+      machineId: 'machine-a',
+    };
     settings.plexServers = [
       {
         id: 2,
@@ -519,6 +523,13 @@ describe('PlexTvAPI.getUsersWithServerAccess', () => {
       '12',
       '20',
       '30',
+    ]);
+    assert.deepEqual(users.find((user) => user.id === '12')?.serverNames, [
+      'Server A',
+      'Server B',
+    ]);
+    assert.deepEqual(users.find((user) => user.id === '30')?.serverNames, [
+      'Server B',
     ]);
   });
 

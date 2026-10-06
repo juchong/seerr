@@ -34,6 +34,7 @@ const messages = defineMessages('components.UserList', {
   importedPlexUsersNoPassword:
     'Imported users do not have a {applicationTitle} password set. If you disable Plex sign-in, they will need to set a password from their profile or via a password reset link.',
   user: 'User',
+  server: 'Server',
   nouserstoimport: 'There are no Plex users to import.',
   newplexsigninenabled:
     'The <strong>Enable New Plex Sign-In</strong> setting is currently enabled. Plex users with library access do not need to be imported in order to sign in.',
@@ -52,10 +53,14 @@ const PlexImportModal = ({ onCancel, onComplete }: PlexImportProps) => {
       username: string;
       email: string;
       thumb: string;
+      serverNames?: string[];
     }[]
   >(`/api/v1/settings/plex/users`, {
     revalidateOnMount: true,
   });
+  // Only worth a column when users come from more than one Plex server.
+  const showServers =
+    new Set(data?.flatMap((user) => user.serverNames ?? [])).size > 1;
 
   const importUsers = async () => {
     setImporting(true);
@@ -219,6 +224,11 @@ const PlexImportModal = ({ onCancel, onComplete }: PlexImportProps) => {
                         <th className="bg-gray-500 px-1 py-3 text-left text-xs font-medium uppercase leading-4 tracking-wider text-gray-200 md:px-6">
                           {intl.formatMessage(messages.user)}
                         </th>
+                        {showServers && (
+                          <th className="bg-gray-500 px-1 py-3 text-left text-xs font-medium uppercase leading-4 tracking-wider text-gray-200 md:px-6">
+                            {intl.formatMessage(messages.server)}
+                          </th>
+                        )}
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-700 bg-gray-600">
@@ -278,6 +288,11 @@ const PlexImportModal = ({ onCancel, onComplete }: PlexImportProps) => {
                               </div>
                             </div>
                           </td>
+                          {showServers && (
+                            <td className="whitespace-nowrap px-1 py-4 text-sm leading-5 text-gray-300 md:px-6">
+                              {user.serverNames?.join(', ')}
+                            </td>
+                          )}
                         </tr>
                       ))}
                     </tbody>

@@ -1,6 +1,7 @@
 import type { JellyfinLibrary } from '@server/api/jellyfin';
 import JellyfinAPI from '@server/api/jellyfin';
 import PlexAPI from '@server/api/plexapi';
+import type { PlexServerUser } from '@server/api/plextv';
 import PlexTvAPI from '@server/api/plextv';
 import TautulliAPI from '@server/api/tautulli';
 import { ApiErrorCode } from '@server/constants/error';
@@ -551,13 +552,7 @@ settingsRoutes.get(
         await PlexTvAPI.getUsersWithServerAccess(admin.plexToken ?? '')
       ).filter((user) => user.email);
 
-      const unimportedPlexUsers: {
-        id: string;
-        title: string;
-        username: string;
-        email: string;
-        thumb: string;
-      }[] = [];
+      const unimportedPlexUsers: PlexServerUser[] = [];
 
       const plexIds = plexUsers.map((plexUser) => plexUser.id);
       const plexEmails = plexUsers.map((plexUser) =>

@@ -91,6 +91,9 @@ export interface PlexSharedUser {
   thumb: string;
 }
 
+/** A plex.tv user and the configured Plex servers they can use. */
+export type PlexServerUser = PlexSharedUser & { serverNames: string[] };
+
 interface UsersResponse {
   MediaContainer: {
     User: {
@@ -331,8 +334,8 @@ class PlexTvAPI extends ExternalAPI {
    */
   public static async getUsersWithServerAccess(
     adminToken: string
-  ): Promise<PlexSharedUser[]> {
-    const users = new Map<string, PlexSharedUser>();
+  ): Promise<PlexServerUser[]> {
+    const users = new Map<string, PlexServerUser>();
 
     for (const server of getSettings().allPlexServers) {
       if (!server.machineId) {
@@ -340,10 +343,18 @@ class PlexTvAPI extends ExternalAPI {
       }
 
       const plexTv = new PlexTvAPI(server.ownerToken ?? adminToken);
+      const add = (user: PlexSharedUser) => {
+        const existing = users.get(user.id);
+        if (existing) {
+          existing.serverNames.push(server.name);
+        } else {
+          users.set(user.id, { ...user, serverNames: [server.name] });
+        }
+      };
       try {
         if (server.ownerToken) {
           const owner = await plexTv.getUser();
-          users.set(String(owner.id), {
+          add({
             id: String(owner.id),
             title: owner.title,
             username: owner.username,
@@ -357,7 +368,7 @@ class PlexTvAPI extends ExternalAPI {
           if (
             user.Server?.some((s) => s.$.machineIdentifier === server.machineId)
           ) {
-            users.set(user.$.id, user.$);
+            add(user.$);
           }
         }
       } catch (e) {

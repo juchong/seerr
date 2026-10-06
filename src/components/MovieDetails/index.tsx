@@ -215,6 +215,39 @@ const MovieDetails = ({ movie }: MovieDetailsProps) => {
     });
   }
 
+  // The same title on the additional Plex servers.
+  data.mediaInfo?.additionalPlexUrls?.forEach((link) => {
+    if (
+      link.mediaUrl &&
+      hasPermission([Permission.REQUEST, Permission.REQUEST_MOVIE], {
+        type: 'or',
+      })
+    ) {
+      mediaLinks.push({
+        text: intl.formatMessage(messages.play, {
+          mediaServerName: link.serverName,
+        }),
+        url: link.mediaUrl,
+        svg: <PlayIcon />,
+      });
+    }
+    if (
+      settings.currentSettings.movie4kEnabled &&
+      link.mediaUrl4k &&
+      hasPermission([Permission.REQUEST_4K, Permission.REQUEST_4K_MOVIE], {
+        type: 'or',
+      })
+    ) {
+      mediaLinks.push({
+        text: intl.formatMessage(messages.play4k, {
+          mediaServerName: link.serverName,
+        }),
+        url: link.mediaUrl4k,
+        svg: <PlayIcon />,
+      });
+    }
+  });
+
   const trailerVideo = data.relatedVideos
     ?.filter((r) => r.type === 'Trailer')
     .sort((a, b) => a.size - b.size)
