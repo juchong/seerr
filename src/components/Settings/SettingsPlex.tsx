@@ -64,6 +64,7 @@ const messages = defineMessages('components.Settings', {
   notrunning: 'Not Running',
   currentlibrary: 'Current Library: {name}',
   currentserver: 'Current Server: {name}',
+  manualscanAllServers: 'Manual Library Scan (All Servers)',
   librariesRemaining: 'Libraries Remaining: {count}',
   startscan: 'Start Scan',
   cancelscan: 'Cancel Scan',
@@ -134,6 +135,9 @@ const SettingsPlex = ({ isSetupSettings }: SettingsPlexProps) => {
     mutate: revalidateTautulli,
   } = useSWR<TautulliSettings>(
     isSetupSettings ? null : '/api/v1/settings/tautulli'
+  );
+  const { data: additionalServers } = useSWR<PlexSettings[]>(
+    isSetupSettings ? null : '/api/v1/settings/plex/servers'
   );
   const { data: dataSync, mutate: revalidateSync } = useSWR<SyncStatus>(
     '/api/v1/settings/plex/sync',
@@ -357,322 +361,346 @@ const SettingsPlex = ({ isSetupSettings }: SettingsPlexProps) => {
           intl.formatMessage(globalMessages.settings),
         ]}
       />
-      <div className="mb-6">
-        <h3 className="heading">{intl.formatMessage(messages.plexsettings)}</h3>
-        <p className="description">
-          {intl.formatMessage(messages.plexsettingsDescription)}
-        </p>
-        {isSetupSettings && (
-          <div className="section">
-            <Alert
-              title={intl.formatMessage(messages.settingUpPlexDescription, {
-                RegisterPlexTVLink: (msg: React.ReactNode) => (
-                  <a
-                    href="https://plex.tv"
-                    className="text-white transition duration-300 hover:underline"
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    {msg}
-                  </a>
-                ),
-              })}
-              type="info"
-            />
-          </div>
-        )}
-      </div>
-      <Formik
-        initialValues={{
-          hostname: data?.ip,
-          port: data?.port ?? 32400,
-          useSsl: data?.useSsl,
-          selectedPreset: undefined,
-          webAppUrl: data?.webAppUrl,
-        }}
-        validationSchema={PlexSettingsSchema}
-        validateOnMount={true}
-        onSubmit={async (values) => {
-          let toastId: string | null = null;
-          try {
-            addToast(
-              intl.formatMessage(messages.toastPlexConnecting),
-              {
-                autoDismiss: false,
-                appearance: 'info',
-              },
-              (id) => {
-                toastId = id;
+      {isSetupSettings && (
+        <div className="mb-6">
+          <h3 className="heading">
+            {intl.formatMessage(messages.plexsettings)}
+          </h3>
+          <p className="description">
+            {intl.formatMessage(messages.plexsettingsDescription)}
+          </p>
+          {isSetupSettings && (
+            <div className="section">
+              <Alert
+                title={intl.formatMessage(messages.settingUpPlexDescription, {
+                  RegisterPlexTVLink: (msg: React.ReactNode) => (
+                    <a
+                      href="https://plex.tv"
+                      className="text-white transition duration-300 hover:underline"
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      {msg}
+                    </a>
+                  ),
+                })}
+                type="info"
+              />
+            </div>
+          )}
+        </div>
+      )}
+      {isSetupSettings ? (
+        <>
+          <Formik
+            initialValues={{
+              hostname: data?.ip,
+              port: data?.port ?? 32400,
+              useSsl: data?.useSsl,
+              selectedPreset: undefined,
+              webAppUrl: data?.webAppUrl,
+            }}
+            validationSchema={PlexSettingsSchema}
+            validateOnMount={true}
+            onSubmit={async (values) => {
+              let toastId: string | null = null;
+              try {
+                addToast(
+                  intl.formatMessage(messages.toastPlexConnecting),
+                  {
+                    autoDismiss: false,
+                    appearance: 'info',
+                  },
+                  (id) => {
+                    toastId = id;
+                  }
+                );
+                await axios.post('/api/v1/settings/plex', {
+                  ip: values.hostname,
+                  port: Number(values.port),
+                  useSsl: values.useSsl,
+                  webAppUrl: values.webAppUrl,
+                } as PlexSettings);
+
+                syncLibraries();
+
+                if (toastId) {
+                  removeToast(toastId);
+                }
+                addToast(
+                  intl.formatMessage(messages.toastPlexConnectingSuccess),
+                  {
+                    autoDismiss: true,
+                    appearance: 'success',
+                  }
+                );
+              } catch {
+                if (toastId) {
+                  removeToast(toastId);
+                }
+                addToast(
+                  intl.formatMessage(messages.toastPlexConnectingFailure),
+                  {
+                    autoDismiss: true,
+                    appearance: 'error',
+                  }
+                );
               }
-            );
-            await axios.post('/api/v1/settings/plex', {
-              ip: values.hostname,
-              port: Number(values.port),
-              useSsl: values.useSsl,
-              webAppUrl: values.webAppUrl,
-            } as PlexSettings);
+            }}
+          >
+            {({
+              errors,
+              touched,
+              values,
+              handleSubmit,
+              setFieldValue,
+              setValues,
+              isSubmitting,
+              isValid,
+            }) => {
+              return (
+                <form className="section" onSubmit={handleSubmit}>
+                  <div className="form-row">
+                    <label htmlFor="preset" className="text-label">
+                      {intl.formatMessage(messages.serverpreset)}
+                    </label>
+                    <div className="form-input-area">
+                      <div className="form-input-field">
+                        <select
+                          id="preset"
+                          name="preset"
+                          value={values.selectedPreset}
+                          disabled={!availableServers || isRefreshingPresets}
+                          className="rounded-l-only"
+                          onChange={async (e) => {
+                            const targPreset =
+                              availablePresets[Number(e.target.value)];
 
-            syncLibraries();
-
-            if (toastId) {
-              removeToast(toastId);
-            }
-            addToast(intl.formatMessage(messages.toastPlexConnectingSuccess), {
-              autoDismiss: true,
-              appearance: 'success',
-            });
-          } catch {
-            if (toastId) {
-              removeToast(toastId);
-            }
-            addToast(intl.formatMessage(messages.toastPlexConnectingFailure), {
-              autoDismiss: true,
-              appearance: 'error',
-            });
-          }
-        }}
-      >
-        {({
-          errors,
-          touched,
-          values,
-          handleSubmit,
-          setFieldValue,
-          setValues,
-          isSubmitting,
-          isValid,
-        }) => {
-          return (
-            <form className="section" onSubmit={handleSubmit}>
-              <div className="form-row">
-                <label htmlFor="preset" className="text-label">
-                  {intl.formatMessage(messages.serverpreset)}
-                </label>
-                <div className="form-input-area">
-                  <div className="form-input-field">
-                    <select
-                      id="preset"
-                      name="preset"
-                      value={values.selectedPreset}
-                      disabled={!availableServers || isRefreshingPresets}
-                      className="rounded-l-only"
-                      onChange={async (e) => {
-                        const targPreset =
-                          availablePresets[Number(e.target.value)];
-
-                        if (targPreset) {
-                          setValues({
-                            ...values,
-                            hostname: targPreset.address,
-                            port: targPreset.port,
-                            useSsl: targPreset.ssl,
-                          });
-                        }
-                      }}
-                    >
-                      <option value="manual">
-                        {availableServers || isRefreshingPresets
-                          ? isRefreshingPresets
-                            ? intl.formatMessage(
-                                messages.serverpresetRefreshing
-                              )
-                            : intl.formatMessage(
-                                messages.serverpresetManualMessage
-                              )
-                          : intl.formatMessage(messages.serverpresetLoad)}
-                      </option>
-                      {availablePresets.map((server, index) => (
-                        <option
-                          key={`preset-server-${index}`}
-                          value={index}
-                          disabled={!server.status}
-                        >
-                          {`
-                            ${server.name} (${server.address})
-                            [${
-                              server.local
-                                ? intl.formatMessage(messages.serverLocal)
-                                : intl.formatMessage(messages.serverRemote)
-                            }]${
-                              server.ssl
-                                ? ` [${intl.formatMessage(
-                                    messages.serverSecure
-                                  )}]`
-                                : ''
+                            if (targPreset) {
+                              setValues({
+                                ...values,
+                                hostname: targPreset.address,
+                                port: targPreset.port,
+                                useSsl: targPreset.ssl,
+                              });
                             }
-                            ${server.status ? '' : '(' + server.message + ')'}
-                          `}
-                        </option>
-                      ))}
-                    </select>
-                    <button
-                      onClick={(e) => {
-                        e.preventDefault();
-                        refreshPresetServers();
-                      }}
-                      className="input-action"
-                    >
-                      <ArrowPathIcon
-                        className={isRefreshingPresets ? 'animate-spin' : ''}
-                        style={{ animationDirection: 'reverse' }}
+                          }}
+                        >
+                          <option value="manual">
+                            {availableServers || isRefreshingPresets
+                              ? isRefreshingPresets
+                                ? intl.formatMessage(
+                                    messages.serverpresetRefreshing
+                                  )
+                                : intl.formatMessage(
+                                    messages.serverpresetManualMessage
+                                  )
+                              : intl.formatMessage(messages.serverpresetLoad)}
+                          </option>
+                          {availablePresets.map((server, index) => (
+                            <option
+                              key={`preset-server-${index}`}
+                              value={index}
+                              disabled={!server.status}
+                            >
+                              {`
+                              ${server.name} (${server.address})
+                              [${
+                                server.local
+                                  ? intl.formatMessage(messages.serverLocal)
+                                  : intl.formatMessage(messages.serverRemote)
+                              }]${
+                                server.ssl
+                                  ? ` [${intl.formatMessage(
+                                      messages.serverSecure
+                                    )}]`
+                                  : ''
+                              }
+                              ${server.status ? '' : '(' + server.message + ')'}
+                            `}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          onClick={(e) => {
+                            e.preventDefault();
+                            refreshPresetServers();
+                          }}
+                          className="input-action"
+                        >
+                          <ArrowPathIcon
+                            className={
+                              isRefreshingPresets ? 'animate-spin' : ''
+                            }
+                            style={{ animationDirection: 'reverse' }}
+                          />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="form-row">
+                    <label htmlFor="hostname" className="text-label">
+                      {intl.formatMessage(messages.hostname)}
+                      <span className="label-required">*</span>
+                    </label>
+                    <div className="form-input-area">
+                      <div className="form-input-field">
+                        <span className="inline-flex cursor-default items-center rounded-l-md border border-r-0 border-gray-500 bg-gray-800 px-3 text-gray-100 sm:text-sm">
+                          {values.useSsl ? 'https://' : 'http://'}
+                        </span>
+                        <Field
+                          type="text"
+                          inputMode="url"
+                          id="hostname"
+                          name="hostname"
+                          className="rounded-r-only"
+                        />
+                      </div>
+                      {errors.hostname &&
+                        touched.hostname &&
+                        typeof errors.hostname === 'string' && (
+                          <div className="error">{errors.hostname}</div>
+                        )}
+                    </div>
+                  </div>
+                  <div className="form-row">
+                    <label htmlFor="port" className="text-label">
+                      {intl.formatMessage(messages.port)}
+                      <span className="label-required">*</span>
+                    </label>
+                    <div className="form-input-area">
+                      <Field
+                        type="text"
+                        inputMode="numeric"
+                        id="port"
+                        name="port"
+                        className="short"
                       />
-                    </button>
+                      {errors.port &&
+                        touched.port &&
+                        typeof errors.port === 'string' && (
+                          <div className="error">{errors.port}</div>
+                        )}
+                    </div>
                   </div>
-                </div>
-              </div>
-              <div className="form-row">
-                <label htmlFor="hostname" className="text-label">
-                  {intl.formatMessage(messages.hostname)}
-                  <span className="label-required">*</span>
-                </label>
-                <div className="form-input-area">
-                  <div className="form-input-field">
-                    <span className="inline-flex cursor-default items-center rounded-l-md border border-r-0 border-gray-500 bg-gray-800 px-3 text-gray-100 sm:text-sm">
-                      {values.useSsl ? 'https://' : 'http://'}
-                    </span>
-                    <Field
-                      type="text"
-                      inputMode="url"
-                      id="hostname"
-                      name="hostname"
-                      className="rounded-r-only"
-                    />
+                  <div className="form-row">
+                    <label htmlFor="ssl" className="checkbox-label">
+                      {intl.formatMessage(messages.enablessl)}
+                    </label>
+                    <div className="form-input-area">
+                      <Field
+                        type="checkbox"
+                        id="useSsl"
+                        name="useSsl"
+                        onChange={() => {
+                          setFieldValue('useSsl', !values.useSsl);
+                        }}
+                      />
+                    </div>
                   </div>
-                  {errors.hostname &&
-                    touched.hostname &&
-                    typeof errors.hostname === 'string' && (
-                      <div className="error">{errors.hostname}</div>
-                    )}
-                </div>
-              </div>
-              <div className="form-row">
-                <label htmlFor="port" className="text-label">
-                  {intl.formatMessage(messages.port)}
-                  <span className="label-required">*</span>
-                </label>
-                <div className="form-input-area">
-                  <Field
-                    type="text"
-                    inputMode="numeric"
-                    id="port"
-                    name="port"
-                    className="short"
-                  />
-                  {errors.port &&
-                    touched.port &&
-                    typeof errors.port === 'string' && (
-                      <div className="error">{errors.port}</div>
-                    )}
-                </div>
-              </div>
-              <div className="form-row">
-                <label htmlFor="ssl" className="checkbox-label">
-                  {intl.formatMessage(messages.enablessl)}
-                </label>
-                <div className="form-input-area">
-                  <Field
-                    type="checkbox"
-                    id="useSsl"
-                    name="useSsl"
-                    onChange={() => {
-                      setFieldValue('useSsl', !values.useSsl);
-                    }}
-                  />
-                </div>
-              </div>
-              <div className="form-row">
-                <label htmlFor="webAppUrl" className="text-label">
-                  {intl.formatMessage(messages.webAppUrl, {
-                    WebAppLink: (msg: React.ReactNode) => (
-                      <a
-                        href="https://support.plex.tv/articles/200288666-opening-plex-web-app/"
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        {msg}
-                      </a>
-                    ),
-                  })}
-                  <SettingsBadge badgeType="advanced" className="ml-2" />
-                  <span className="label-tip">
-                    {intl.formatMessage(messages.webAppUrlTip)}
-                  </span>
-                </label>
-                <div className="form-input-area">
-                  <div className="form-input-field">
-                    <Field
-                      type="text"
-                      inputMode="url"
-                      id="webAppUrl"
-                      name="webAppUrl"
-                      placeholder="https://your-server-fqdn.com/web/index.html"
-                    />
-                  </div>
-                  {errors.webAppUrl &&
-                    touched.webAppUrl &&
-                    typeof errors.webAppUrl === 'string' && (
-                      <div className="error">{errors.webAppUrl}</div>
-                    )}
-                </div>
-              </div>
-              <div className="actions">
-                <div className="flex justify-end">
-                  <span className="ml-3 inline-flex rounded-md shadow-sm">
-                    <Button
-                      buttonType="primary"
-                      type="submit"
-                      disabled={isSubmitting || !isValid}
-                    >
-                      <ArrowDownOnSquareIcon />
-                      <span>
-                        {isSubmitting
-                          ? intl.formatMessage(globalMessages.saving)
-                          : intl.formatMessage(globalMessages.save)}
+                  <div className="form-row">
+                    <label htmlFor="webAppUrl" className="text-label">
+                      {intl.formatMessage(messages.webAppUrl, {
+                        WebAppLink: (msg: React.ReactNode) => (
+                          <a
+                            href="https://support.plex.tv/articles/200288666-opening-plex-web-app/"
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            {msg}
+                          </a>
+                        ),
+                      })}
+                      <SettingsBadge badgeType="advanced" className="ml-2" />
+                      <span className="label-tip">
+                        {intl.formatMessage(messages.webAppUrlTip)}
                       </span>
-                    </Button>
-                  </span>
-                </div>
-              </div>
-            </form>
-          );
-        }}
-      </Formik>
+                    </label>
+                    <div className="form-input-area">
+                      <div className="form-input-field">
+                        <Field
+                          type="text"
+                          inputMode="url"
+                          id="webAppUrl"
+                          name="webAppUrl"
+                          placeholder="https://your-server-fqdn.com/web/index.html"
+                        />
+                      </div>
+                      {errors.webAppUrl &&
+                        touched.webAppUrl &&
+                        typeof errors.webAppUrl === 'string' && (
+                          <div className="error">{errors.webAppUrl}</div>
+                        )}
+                    </div>
+                  </div>
+                  <div className="actions">
+                    <div className="flex justify-end">
+                      <span className="ml-3 inline-flex rounded-md shadow-sm">
+                        <Button
+                          buttonType="primary"
+                          type="submit"
+                          disabled={isSubmitting || !isValid}
+                        >
+                          <ArrowDownOnSquareIcon />
+                          <span>
+                            {isSubmitting
+                              ? intl.formatMessage(globalMessages.saving)
+                              : intl.formatMessage(globalMessages.save)}
+                          </span>
+                        </Button>
+                      </span>
+                    </div>
+                  </div>
+                </form>
+              );
+            }}
+          </Formik>
+          <div className="mb-6 mt-10">
+            <h3 className="heading">
+              {intl.formatMessage(messages.plexlibraries)}
+            </h3>
+            <p className="description">
+              {intl.formatMessage(messages.plexlibrariesDescription)}
+            </p>
+          </div>
+          <div className="section">
+            <Button
+              onClick={() => syncLibraries()}
+              disabled={isSyncing || !data?.ip || !data?.port}
+            >
+              <ArrowPathIcon
+                className={isSyncing ? 'animate-spin' : ''}
+                style={{ animationDirection: 'reverse' }}
+              />
+              <span>
+                {isSyncing
+                  ? intl.formatMessage(messages.scanning)
+                  : intl.formatMessage(messages.scan)}
+              </span>
+            </Button>
+            <ul className="mt-6 grid grid-cols-1 gap-5 sm:grid-cols-2 sm:gap-6 lg:grid-cols-4">
+              {data?.libraries.map((library) => (
+                <LibraryItem
+                  name={library.name}
+                  isEnabled={library.enabled}
+                  key={`setting-library-${library.id}`}
+                  onToggle={() => toggleLibrary(library.id)}
+                />
+              ))}
+            </ul>
+          </div>
+        </>
+      ) : (
+        <SettingsPlexServers />
+      )}
       <div className="mb-6 mt-10">
         <h3 className="heading">
-          {intl.formatMessage(messages.plexlibraries)}
+          {intl.formatMessage(
+            additionalServers?.length
+              ? messages.manualscanAllServers
+              : messages.manualscan
+          )}
         </h3>
-        <p className="description">
-          {intl.formatMessage(messages.plexlibrariesDescription)}
-        </p>
-      </div>
-      <div className="section">
-        <Button
-          onClick={() => syncLibraries()}
-          disabled={isSyncing || !data?.ip || !data?.port}
-        >
-          <ArrowPathIcon
-            className={isSyncing ? 'animate-spin' : ''}
-            style={{ animationDirection: 'reverse' }}
-          />
-          <span>
-            {isSyncing
-              ? intl.formatMessage(messages.scanning)
-              : intl.formatMessage(messages.scan)}
-          </span>
-        </Button>
-        <ul className="mt-6 grid grid-cols-1 gap-5 sm:grid-cols-2 sm:gap-6 lg:grid-cols-4">
-          {data?.libraries.map((library) => (
-            <LibraryItem
-              name={library.name}
-              isEnabled={library.enabled}
-              key={`setting-library-${library.id}`}
-              onToggle={() => toggleLibrary(library.id)}
-            />
-          ))}
-        </ul>
-      </div>
-      <div className="mb-6 mt-10">
-        <h3 className="heading">{intl.formatMessage(messages.manualscan)}</h3>
         <p className="description">
           {intl.formatMessage(messages.manualscanDescription)}
         </p>
@@ -740,7 +768,13 @@ const SettingsPlex = ({ isSetupSettings }: SettingsPlexProps) => {
                 <Button
                   buttonType="warning"
                   onClick={() => startScan()}
-                  disabled={isSyncing || !activeLibraries.length}
+                  disabled={
+                    isSyncing ||
+                    (!activeLibraries.length &&
+                      !additionalServers?.some((server) =>
+                        server.libraries.some((library) => library.enabled)
+                      ))
+                  }
                 >
                   <MagnifyingGlassIcon />
                   <span>{intl.formatMessage(messages.startscan)}</span>
@@ -755,7 +789,6 @@ const SettingsPlex = ({ isSetupSettings }: SettingsPlexProps) => {
           </div>
         </div>
       </div>
-      {!isSetupSettings && <SettingsPlexServers />}
       {!isSetupSettings && (
         <>
           <div className="mb-6 mt-10">

@@ -14,7 +14,7 @@ import {
   PlusIcon,
   TrashIcon,
 } from '@heroicons/react/24/solid';
-import type { Library } from '@server/lib/settings';
+import type { Library, PlexSettings } from '@server/lib/settings';
 import axios from 'axios';
 import { Field, Formik } from 'formik';
 import { useState } from 'react';
@@ -23,9 +23,10 @@ import useSWR from 'swr';
 import * as Yup from 'yup';
 
 const messages = defineMessages('components.Settings.SettingsPlexServers', {
-  plexServers: 'Additional Plex Servers',
+  plexServers: 'Plex Servers',
   plexServersDescription:
-    'Plex servers owned by other Plex accounts. Users shared on any configured server can sign in, and titles on any server count as available.',
+    'The Plex servers Seerr uses. Users shared on any server can sign in, and titles on any server count as available.',
+  primary: 'Primary',
   addServer: 'Add Plex Server',
   editServer: 'Edit Plex Server',
   deleteServer: 'Delete Plex Server',
@@ -42,6 +43,8 @@ const messages = defineMessages('components.Settings.SettingsPlexServers', {
   owner: 'Server Owner',
   ownerTip:
     'Sign in with the Plex account that owns this server; sign out of plex.tv first if your browser is signed in as another account',
+  primaryOwnerTip:
+    'The primary server is reached with the Plex account of the Seerr administrator',
   signInAsOwner: 'Sign In as Owner',
   signingIn: 'Signing In…',
   ownerSignedIn: 'Signed In',
@@ -60,17 +63,24 @@ const messages = defineMessages('components.Settings.SettingsPlexServers', {
   toastDeleteFailed: 'Failed to delete the Plex server.',
 });
 
+// One shape for the primary server (/settings/plex) and the additional ones
+// (/settings/plex/servers), so both render as the same card.
 interface PlexServer {
   id: number;
   name: string;
-  machineId?: string;
   ip: string;
   port: number;
   useSsl?: boolean;
   webAppUrl?: string;
   libraries: Library[];
   hasOwnerToken: boolean;
+  isPrimary: boolean;
 }
+
+const apiBase = (server: PlexServer) =>
+  server.isPrimary
+    ? '/api/v1/settings/plex'
+    : `/api/v1/settings/plex/servers/${server.id}`;
 
 interface PlexServerModalProps {
   server?: PlexServer;
@@ -103,7 +113,8 @@ const PlexServerModal = ({ server, onClose, onSave }: PlexServerModalProps) => {
       .url(intl.formatMessage(messages.validationWebAppUrl)),
   });
 
-  const hasOwner = !!ownerToken || !!server?.hasOwnerToken;
+  const isPrimary = !!server?.isPrimary;
+  const hasOwner = isPrimary || !!ownerToken || !!server?.hasOwnerToken;
 
   return (
     <Transition
@@ -126,22 +137,25 @@ const PlexServerModal = ({ server, onClose, onSave }: PlexServerModalProps) => {
         }}
         validationSchema={schema}
         onSubmit={async (values) => {
-          // An omitted owner token keeps the stored one.
-          const body = {
+          const address = {
             ip: values.ip,
             port: Number(values.port),
             useSsl: values.useSsl,
-            webAppUrl: values.webAppUrl || undefined,
-            ownerToken,
+            webAppUrl: values.webAppUrl,
           };
           try {
-            if (server) {
-              await axios.put(
-                `/api/v1/settings/plex/servers/${server.id}`,
-                body
-              );
+            if (!server) {
+              await axios.post('/api/v1/settings/plex/servers', {
+                ...address,
+                ownerToken,
+              });
+            } else if (isPrimary) {
+              await axios.post(apiBase(server), address);
+              // As the setup form does: a new address may mean new libraries.
+              await axios.post(`${apiBase(server)}/library/sync`);
             } else {
-              await axios.post('/api/v1/settings/plex/servers', body);
+              // An omitted owner token keeps the stored one.
+              await axios.put(apiBase(server), { ...address, ownerToken });
             }
             addToast(intl.formatMessage(messages.toastServerSaved), {
               autoDismiss: true,
@@ -182,30 +196,36 @@ const PlexServerModal = ({ server, onClose, onSave }: PlexServerModalProps) => {
               <div className="form-row">
                 <label className="text-label">
                   {intl.formatMessage(messages.owner)}
-                  <span className="label-required">*</span>
+                  {!isPrimary && <span className="label-required">*</span>}
                   <span className="label-tip">
-                    {intl.formatMessage(messages.ownerTip)}
+                    {intl.formatMessage(
+                      isPrimary ? messages.primaryOwnerTip : messages.ownerTip
+                    )}
                   </span>
                 </label>
-                <div className="form-input-area flex items-center space-x-3">
-                  <Button
-                    type="button"
-                    buttonType="ghost"
-                    onClick={() => login()}
-                    disabled={signingIn || isSubmitting}
-                  >
-                    <span>
-                      {intl.formatMessage(
-                        signingIn ? messages.signingIn : messages.signInAsOwner
-                      )}
-                    </span>
-                  </Button>
-                  {hasOwner && (
-                    <Badge badgeType="success">
-                      {intl.formatMessage(messages.ownerSignedIn)}
-                    </Badge>
-                  )}
-                </div>
+                {!isPrimary && (
+                  <div className="form-input-area flex items-center space-x-3">
+                    <Button
+                      type="button"
+                      buttonType="ghost"
+                      onClick={() => login()}
+                      disabled={signingIn || isSubmitting}
+                    >
+                      <span>
+                        {intl.formatMessage(
+                          signingIn
+                            ? messages.signingIn
+                            : messages.signInAsOwner
+                        )}
+                      </span>
+                    </Button>
+                    {hasOwner && (
+                      <Badge badgeType="success">
+                        {intl.formatMessage(messages.ownerSignedIn)}
+                      </Badge>
+                    )}
+                  </div>
+                )}
               </div>
               <div className="form-row">
                 <label htmlFor="ip" className="text-label">
@@ -288,15 +308,34 @@ const PlexServerModal = ({ server, onClose, onSave }: PlexServerModalProps) => {
 const SettingsPlexServers = () => {
   const intl = useIntl();
   const { addToast } = useToasts();
-  const { data, error, mutate } = useSWR<PlexServer[]>(
-    '/api/v1/settings/plex/servers'
-  );
+  const {
+    data: primary,
+    error: primaryError,
+    mutate: mutatePrimary,
+  } = useSWR<PlexSettings>('/api/v1/settings/plex');
+  const {
+    data: additional,
+    error: additionalError,
+    mutate: mutateAdditional,
+  } = useSWR<Omit<PlexServer, 'isPrimary'>[]>('/api/v1/settings/plex/servers');
   const [editing, setEditing] = useState<{
     open: boolean;
     server?: PlexServer;
   }>({ open: false });
   const [deleting, setDeleting] = useState<PlexServer | null>(null);
   const [syncingId, setSyncingId] = useState<number | null>(null);
+
+  const servers: PlexServer[] = [
+    ...(primary
+      ? [{ ...primary, id: 1, hasOwnerToken: true, isPrimary: true }]
+      : []),
+    ...(additional ?? []).map((server) => ({ ...server, isPrimary: false })),
+  ];
+
+  const revalidate = () => {
+    mutatePrimary();
+    mutateAdditional();
+  };
 
   const showError = (message: { id: string; defaultMessage: string }) =>
     addToast(intl.formatMessage(message), {
@@ -307,27 +346,24 @@ const SettingsPlexServers = () => {
   const syncLibraries = async (server: PlexServer) => {
     setSyncingId(server.id);
     try {
-      await axios.post(
-        `/api/v1/settings/plex/servers/${server.id}/library/sync`
-      );
+      await axios.post(`${apiBase(server)}/library/sync`);
     } catch {
       showError(messages.toastSyncFailed);
     } finally {
       setSyncingId(null);
-      mutate();
+      revalidate();
     }
   };
 
   const toggleLibrary = async (server: PlexServer, library: Library) => {
     try {
-      await axios.put(
-        `/api/v1/settings/plex/servers/${server.id}/library/${library.id}`,
-        { enabled: !library.enabled }
-      );
+      await axios.put(`${apiBase(server)}/library/${library.id}`, {
+        enabled: !library.enabled,
+      });
     } catch {
       showError(messages.toastToggleFailed);
     } finally {
-      mutate();
+      revalidate();
     }
   };
 
@@ -336,14 +372,17 @@ const SettingsPlexServers = () => {
       return;
     }
     try {
-      await axios.delete(`/api/v1/settings/plex/servers/${deleting.id}`);
+      await axios.delete(apiBase(deleting));
     } catch {
       showError(messages.toastDeleteFailed);
     } finally {
       setDeleting(null);
-      mutate();
+      revalidate();
     }
   };
+
+  const footerButton =
+    'focus:ring-blue relative inline-flex w-0 flex-1 items-center justify-center border border-transparent py-4 text-sm font-medium leading-5 text-gray-200 transition duration-150 ease-in-out hover:text-white focus:z-10 focus:border-gray-500 focus:outline-none';
 
   return (
     <>
@@ -353,7 +392,7 @@ const SettingsPlexServers = () => {
           onClose={() => setEditing({ open: false })}
           onSave={() => {
             setEditing({ open: false });
-            mutate();
+            revalidate();
           }}
         />
       )}
@@ -377,95 +416,106 @@ const SettingsPlexServers = () => {
           {intl.formatMessage(messages.deleteServerConfirm)}
         </Modal>
       </Transition>
-      <div className="mb-6 mt-10">
+      <div className="mb-6">
         <h3 className="heading">{intl.formatMessage(messages.plexServers)}</h3>
         <p className="description">
           {intl.formatMessage(messages.plexServersDescription)}
         </p>
       </div>
       <div className="section">
-        {!data && !error && <LoadingSpinner />}
-        {data && (
-          <ul className="grid grid-cols-1 gap-6">
-            {data.map((server) => (
-              <li
-                key={`plex-server-${server.id}`}
-                className="col-span-1 rounded-lg bg-gray-800 shadow ring-1 ring-gray-500"
-              >
-                <div className="p-6">
-                  <div className="mb-2 flex items-center space-x-2">
-                    <h3 className="truncate font-medium leading-5 text-white">
-                      {server.name}
-                    </h3>
-                    {server.useSsl && (
-                      <Badge badgeType="success">
-                        {intl.formatMessage(messages.ssl)}
-                      </Badge>
-                    )}
-                  </div>
-                  <p className="mt-1 truncate text-sm leading-5 text-gray-300">
-                    <span className="mr-2 font-bold">
-                      {intl.formatMessage(messages.address)}
-                    </span>
-                    {`${server.useSsl ? 'https' : 'http'}://${server.ip}:${
-                      server.port
-                    }`}
-                  </p>
-                  <Button
-                    className="mt-4"
-                    buttonSize="sm"
-                    onClick={() => syncLibraries(server)}
-                    disabled={syncingId === server.id}
-                  >
-                    <ArrowPathIcon
-                      className={syncingId === server.id ? 'animate-spin' : ''}
-                      style={{ animationDirection: 'reverse' }}
-                    />
-                    <span>
-                      {intl.formatMessage(
-                        syncingId === server.id
-                          ? messages.syncing
-                          : messages.syncLibraries
-                      )}
-                    </span>
-                  </Button>
-                  <ul className="mt-4 grid grid-cols-1 gap-5 sm:grid-cols-2 sm:gap-6 lg:grid-cols-4">
-                    {server.libraries.map((library) => (
-                      <LibraryItem
-                        key={`plex-server-${server.id}-library-${library.id}`}
-                        name={library.name}
-                        isEnabled={library.enabled}
-                        onToggle={() => toggleLibrary(server, library)}
-                      />
-                    ))}
-                  </ul>
+        {(!primary || !additional) && !primaryError && !additionalError && (
+          <LoadingSpinner />
+        )}
+        <ul className="grid grid-cols-1 gap-6">
+          {servers.map((server) => (
+            <li
+              key={`plex-server-${server.id}`}
+              className="col-span-1 rounded-lg bg-gray-800 shadow ring-1 ring-gray-500"
+            >
+              <div className="p-6">
+                <div className="mb-2 flex items-center space-x-2">
+                  <h3 className="truncate font-medium leading-5 text-white">
+                    {server.name}
+                  </h3>
+                  {server.isPrimary && (
+                    <Badge>{intl.formatMessage(messages.primary)}</Badge>
+                  )}
+                  {server.useSsl && (
+                    <Badge badgeType="success">
+                      {intl.formatMessage(messages.ssl)}
+                    </Badge>
+                  )}
                 </div>
-                <div className="border-t border-gray-500">
-                  <div className="-mt-px flex">
-                    <div className="flex w-0 flex-1 border-r border-gray-500">
-                      <button
-                        onClick={() => setEditing({ open: true, server })}
-                        className="focus:ring-blue relative -mr-px inline-flex w-0 flex-1 items-center justify-center rounded-bl-lg border border-transparent py-4 text-sm font-medium leading-5 text-gray-200 transition duration-150 ease-in-out hover:text-white focus:z-10 focus:border-gray-500 focus:outline-none"
-                      >
-                        <PencilIcon className="mr-2 h-5 w-5" />
-                        <span>{intl.formatMessage(globalMessages.edit)}</span>
-                      </button>
-                    </div>
+                <p className="mt-1 truncate text-sm leading-5 text-gray-300">
+                  <span className="mr-2 font-bold">
+                    {intl.formatMessage(messages.address)}
+                  </span>
+                  {`${server.useSsl ? 'https' : 'http'}://${server.ip}:${
+                    server.port
+                  }`}
+                </p>
+                <Button
+                  className="mt-4"
+                  buttonSize="sm"
+                  onClick={() => syncLibraries(server)}
+                  disabled={syncingId === server.id}
+                >
+                  <ArrowPathIcon
+                    className={syncingId === server.id ? 'animate-spin' : ''}
+                    style={{ animationDirection: 'reverse' }}
+                  />
+                  <span>
+                    {intl.formatMessage(
+                      syncingId === server.id
+                        ? messages.syncing
+                        : messages.syncLibraries
+                    )}
+                  </span>
+                </Button>
+                <ul className="mt-4 grid grid-cols-1 gap-5 sm:grid-cols-2 sm:gap-6 lg:grid-cols-4">
+                  {server.libraries.map((library) => (
+                    <LibraryItem
+                      key={`plex-server-${server.id}-library-${library.id}`}
+                      name={library.name}
+                      isEnabled={library.enabled}
+                      onToggle={() => toggleLibrary(server, library)}
+                    />
+                  ))}
+                </ul>
+              </div>
+              <div className="border-t border-gray-500">
+                <div className="-mt-px flex">
+                  <div
+                    className={`flex w-0 flex-1 ${
+                      server.isPrimary ? '' : 'border-r border-gray-500'
+                    }`}
+                  >
+                    <button
+                      onClick={() => setEditing({ open: true, server })}
+                      className={`${footerButton} -mr-px ${
+                        server.isPrimary ? 'rounded-b-lg' : 'rounded-bl-lg'
+                      }`}
+                    >
+                      <PencilIcon className="mr-2 h-5 w-5" />
+                      <span>{intl.formatMessage(globalMessages.edit)}</span>
+                    </button>
+                  </div>
+                  {!server.isPrimary && (
                     <div className="-ml-px flex w-0 flex-1">
                       <button
                         onClick={() => setDeleting(server)}
-                        className="focus:ring-blue relative inline-flex w-0 flex-1 items-center justify-center rounded-br-lg border border-transparent py-4 text-sm font-medium leading-5 text-gray-200 transition duration-150 ease-in-out hover:text-white focus:z-10 focus:border-gray-500 focus:outline-none"
+                        className={`${footerButton} rounded-br-lg`}
                       >
                         <TrashIcon className="mr-2 h-5 w-5" />
                         <span>{intl.formatMessage(globalMessages.delete)}</span>
                       </button>
                     </div>
-                  </div>
+                  )}
                 </div>
-              </li>
-            ))}
-          </ul>
-        )}
+              </div>
+            </li>
+          ))}
+        </ul>
         <Button
           className="mt-6"
           buttonType="ghost"
