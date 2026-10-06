@@ -18,13 +18,15 @@ import MediaRequest from '@server/entity/MediaRequest';
 import type Season from '@server/entity/Season';
 import { User } from '@server/entity/User';
 import type { RadarrSettings, SonarrSettings } from '@server/lib/settings';
-import { getSettings } from '@server/lib/settings';
+import { PRIMARY_PLEX_SERVER_ID, getSettings } from '@server/lib/settings';
 import logger from '@server/logger';
 import { getHostname } from '@server/utils/getHostname';
 
+type PlexServerClient = { serverId: number; client: PlexAPI };
+
 class AvailabilitySync {
   public running = false;
-  private plexClient: PlexAPI;
+  private plexClients: PlexServerClient[] = [];
   private plexSeasonsCache: Record<string, PlexMetadata[]>;
   private plexEpisodeExistsCache: Record<string, boolean>;
 
@@ -85,7 +87,14 @@ class AvailabilitySync {
       switch (mediaServerType) {
         case MediaServerType.PLEX:
           if (admin && admin.plexToken) {
-            this.plexClient = new PlexAPI({ plexToken: admin.plexToken });
+            // Additional servers may belong to another plex.tv account.
+            this.plexClients = settings.allPlexServers.map((server) => ({
+              serverId: server.id,
+              client: new PlexAPI({
+                plexToken: server.ownerToken ?? admin.plexToken,
+                plexSettings: server,
+              }),
+            }));
           } else {
             logger.error('Plex admin is not configured.');
           }
@@ -554,6 +563,11 @@ class AvailabilitySync {
         media[is4k ? 'ratingKey4k' : 'ratingKey'] = isMediaProcessing
           ? media[is4k ? 'ratingKey4k' : 'ratingKey']
           : null;
+        if (!isMediaProcessing) {
+          for (const item of media.plexServerItems ?? []) {
+            item[is4k ? 'ratingKey4k' : 'ratingKey'] = null;
+          }
+        }
       } else if (
         mediaServerType === MediaServerType.JELLYFIN ||
         mediaServerType === MediaServerType.EMBY
@@ -868,12 +882,59 @@ class AvailabilitySync {
   }
 
   // Plex
+  // A title counts as present if any Plex server has it. Each server is
+  // asked with its own rating keys; keys are local to a server.
   private async mediaExistsInPlex(
     media: Media,
     is4k: boolean
   ): Promise<{ existsInPlex: boolean; seasonsMap?: Map<number, boolean> }> {
-    const ratingKey = media.ratingKey;
-    const ratingKey4k = media.ratingKey4k;
+    let existsInPlex = false;
+    const seasonsMap: Map<number, boolean> = new Map();
+
+    for (const plexServer of this.plexClients) {
+      const { ratingKey, ratingKey4k } = this.plexKeys(media, plexServer);
+      if (!(is4k ? ratingKey4k : ratingKey)) {
+        continue;
+      }
+
+      const result = await this.mediaExistsInPlexServer(
+        media,
+        is4k,
+        plexServer
+      );
+      existsInPlex ||= result.existsInPlex;
+      result.seasonsMap?.forEach((exists, seasonNumber) => {
+        if (exists) {
+          seasonsMap.set(seasonNumber, true);
+        }
+      });
+    }
+
+    return media.mediaType === 'tv'
+      ? { existsInPlex, seasonsMap }
+      : { existsInPlex };
+  }
+
+  private plexKeys(
+    media: Media,
+    { serverId }: PlexServerClient
+  ): { ratingKey?: string | null; ratingKey4k?: string | null } {
+    if (serverId === PRIMARY_PLEX_SERVER_ID) {
+      return { ratingKey: media.ratingKey, ratingKey4k: media.ratingKey4k };
+    }
+    const item = media.plexServerItems?.find((i) => i.serverId === serverId);
+    return { ratingKey: item?.ratingKey, ratingKey4k: item?.ratingKey4k };
+  }
+
+  private async mediaExistsInPlexServer(
+    media: Media,
+    is4k: boolean,
+    plexServer: PlexServerClient
+  ): Promise<{ existsInPlex: boolean; seasonsMap?: Map<number, boolean> }> {
+    const { ratingKey, ratingKey4k } = this.plexKeys(media, plexServer);
+    const plexClient = plexServer.client;
+    // Rating keys are only unique within a server.
+    const cacheKey = (key: string) => `${plexServer.serverId}:${key}`;
     let existsInPlex = false;
     let preventSeasonSearch = false;
 
@@ -884,11 +945,11 @@ class AvailabilitySync {
       let plexMedia: PlexMetadata | undefined;
 
       if (ratingKey && !is4k) {
-        plexMedia = await this.plexClient?.getMetadata(ratingKey);
+        plexMedia = await plexClient.getMetadata(ratingKey);
 
         if (media.mediaType === 'tv') {
-          this.plexSeasonsCache[ratingKey] =
-            await this.plexClient?.getChildrenMetadata(ratingKey);
+          this.plexSeasonsCache[cacheKey(ratingKey)] =
+            await plexClient.getChildrenMetadata(ratingKey);
         }
 
         if (
@@ -903,11 +964,11 @@ class AvailabilitySync {
       }
 
       if (ratingKey4k && is4k) {
-        plexMedia = await this.plexClient?.getMetadata(ratingKey4k);
+        plexMedia = await plexClient.getMetadata(ratingKey4k);
 
         if (media.mediaType === 'tv') {
-          this.plexSeasonsCache[ratingKey4k] =
-            await this.plexClient?.getChildrenMetadata(ratingKey4k);
+          this.plexSeasonsCache[cacheKey(ratingKey4k)] =
+            await plexClient.getChildrenMetadata(ratingKey4k);
         }
 
         if (plexMedia) {
@@ -921,13 +982,13 @@ class AvailabilitySync {
           }
 
           if (plexMedia && media.mediaType === 'tv') {
-            const cachedSeasons = this.plexSeasonsCache[ratingKey4k];
+            const cachedSeasons = this.plexSeasonsCache[cacheKey(ratingKey4k)];
             if (cachedSeasons?.length) {
               let has4kInAnySeason = false;
               let verifiedAnySeason = false;
               for (const season of cachedSeasons) {
                 try {
-                  const episodes = await this.plexClient?.getChildrenMetadata(
+                  const episodes = await plexClient.getChildrenMetadata(
                     season.ratingKey
                   );
                   if (episodes?.some((episode) => episode.Media?.length)) {
@@ -991,7 +1052,8 @@ class AvailabilitySync {
           const seasonExists = await this.seasonExistsInPlex(
             media,
             season,
-            is4k
+            is4k,
+            plexServer
           );
 
           if (seasonExists) {
@@ -1009,20 +1071,22 @@ class AvailabilitySync {
   private async seasonExistsInPlex(
     media: Media,
     season: Season,
-    is4k: boolean
+    is4k: boolean,
+    plexServer: PlexServerClient
   ): Promise<boolean> {
-    const ratingKey = media.ratingKey;
-    const ratingKey4k = media.ratingKey4k;
+    const { ratingKey, ratingKey4k } = this.plexKeys(media, plexServer);
     let seasonExistsInPlex = false;
 
     let plexSeasons: PlexMetadata[] | undefined;
 
     if (ratingKey && !is4k) {
-      plexSeasons = this.plexSeasonsCache[ratingKey];
+      plexSeasons =
+        this.plexSeasonsCache[`${plexServer.serverId}:${ratingKey}`];
     }
 
     if (ratingKey4k && is4k) {
-      plexSeasons = this.plexSeasonsCache[ratingKey4k];
+      plexSeasons =
+        this.plexSeasonsCache[`${plexServer.serverId}:${ratingKey4k}`];
     }
 
     const seasonMeta = plexSeasons?.find(
@@ -1030,7 +1094,7 @@ class AvailabilitySync {
     );
 
     if (seasonMeta) {
-      const cacheKey = `${is4k ? '4k' : 'std'}-${seasonMeta.ratingKey}`;
+      const cacheKey = `${plexServer.serverId}:${is4k ? '4k' : 'std'}-${seasonMeta.ratingKey}`;
 
       if (cacheKey in this.plexEpisodeExistsCache) {
         seasonExistsInPlex = this.plexEpisodeExistsCache[cacheKey];
@@ -1038,7 +1102,7 @@ class AvailabilitySync {
         try {
           // Season metadata exists, but we need to verify it has actual
           // episode files. Plex can keep empty season entries.
-          const episodes = await this.plexClient?.getChildrenMetadata(
+          const episodes = await plexServer.client.getChildrenMetadata(
             seasonMeta.ratingKey
           );
 

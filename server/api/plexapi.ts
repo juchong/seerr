@@ -1,7 +1,7 @@
 import ExternalAPI from '@server/api/externalapi';
 import { ApiErrorCode } from '@server/constants/error';
 import type { Library, PlexSettings } from '@server/lib/settings';
-import { getSettings } from '@server/lib/settings';
+import { PRIMARY_PLEX_SERVER_ID, getSettings } from '@server/lib/settings';
 import logger from '@server/logger';
 import { ApiError } from '@server/types/error';
 
@@ -135,11 +135,14 @@ class PlexAPI extends ExternalAPI {
     return response.MediaContainer.Directory;
   }
 
-  public async syncLibraries(): Promise<void> {
+  /** Refreshes the stored library list of the server this client talks to. */
+  public async syncLibraries(serverId = PRIMARY_PLEX_SERVER_ID): Promise<void> {
     const settings = getSettings();
 
     try {
       const libraries = await this.getLibraries();
+      const currentLibraries =
+        settings.getPlexServer(serverId)?.libraries ?? [];
 
       const newLibraries: Library[] = libraries
         // Remove libraries that are not movie or show
@@ -149,9 +152,7 @@ class PlexAPI extends ExternalAPI {
         // Remove libraries that do not have a metadata agent set (usually personal video libraries)
         .filter((library) => library.agent !== 'com.plexapp.agents.none')
         .map((library) => {
-          const existing = settings.plex.libraries.find(
-            (l) => l.id === library.key
-          );
+          const existing = currentLibraries.find((l) => l.id === library.key);
 
           return {
             id: library.key,
@@ -162,7 +163,7 @@ class PlexAPI extends ExternalAPI {
           };
         });
 
-      settings.plex.libraries = newLibraries;
+      settings.setPlexServerLibraries(serverId, newLibraries);
     } catch (e) {
       logger.error('Failed to fetch Plex libraries', {
         label: 'Plex API',

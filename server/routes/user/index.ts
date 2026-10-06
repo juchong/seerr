@@ -666,14 +666,13 @@ router.post(
         select: { id: true, plexToken: true },
         where: { id: 1 },
       });
-      const mainPlexTv = new PlexTvAPI(mainUser.plexToken ?? '');
-
-      const plexUsersResponse = await mainPlexTv.getUsers();
+      // Everyone shared on (or owning) any configured Plex server.
+      const plexUsers = await PlexTvAPI.getUsersWithServerAccess(
+        mainUser.plexToken ?? ''
+      );
       const createdUsers: User[] = [];
       let refreshedUsers = 0;
-      for (const rawUser of plexUsersResponse.MediaContainer.User) {
-        const account = rawUser.$;
-
+      for (const account of plexUsers) {
         if (account.email) {
           const user = await userRepository
             .createQueryBuilder('user')
@@ -697,19 +696,17 @@ router.post(
             await userRepository.save(user);
             refreshedUsers += 1;
           } else if (!body || body.plexIds.includes(account.id)) {
-            if (await mainPlexTv.checkUserAccess(parseInt(account.id))) {
-              const newUser = new User({
-                plexUsername: account.username,
-                email: account.email,
-                permissions: settings.main.defaultPermissions,
-                plexId: parseInt(account.id),
-                plexToken: '',
-                avatar: account.thumb,
-                userType: UserType.PLEX,
-              });
-              await userRepository.save(newUser);
-              createdUsers.push(newUser);
-            }
+            const newUser = new User({
+              plexUsername: account.username,
+              email: account.email,
+              permissions: settings.main.defaultPermissions,
+              plexId: parseInt(account.id),
+              plexToken: '',
+              avatar: account.thumb,
+              userType: UserType.PLEX,
+            });
+            await userRepository.save(newUser);
+            createdUsers.push(newUser);
           }
         }
       }

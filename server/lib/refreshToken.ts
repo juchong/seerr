@@ -1,6 +1,7 @@
 import PlexTvAPI from '@server/api/plextv';
 import { getRepository } from '@server/datasource';
 import { User } from '@server/entity/User';
+import { getSettings } from '@server/lib/settings';
 import logger from '@server/logger';
 
 class RefreshToken {
@@ -15,6 +16,13 @@ class RefreshToken {
 
     for (const user of users) {
       await this.refreshUserToken(user);
+    }
+
+    // Owner tokens of additional Plex servers are kept alive the same way.
+    for (const server of getSettings().plexServers) {
+      if (server.ownerToken) {
+        await new PlexTvAPI(server.ownerToken).pingToken();
+      }
     }
   }
 

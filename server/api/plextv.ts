@@ -83,16 +83,18 @@ interface ServerResponse {
   };
 }
 
+export interface PlexSharedUser {
+  id: string;
+  title: string;
+  username: string;
+  email: string;
+  thumb: string;
+}
+
 interface UsersResponse {
   MediaContainer: {
     User: {
-      $: {
-        id: string;
-        title: string;
-        username: string;
-        email: string;
-        thumb: string;
-      };
+      $: PlexSharedUser;
       Server: ServerResponse[];
     }[];
   };
@@ -319,6 +321,54 @@ class PlexTvAPI extends ExternalAPI {
       response.data
     )) as UsersResponse;
     return parsedXml;
+  }
+
+  /**
+   * The plex.tv users who may use Seerr: everyone shared on any configured
+   * Plex server, plus the owners of the additional servers. Each server's
+   * shared list is read with its owner's token (the admin's for the primary
+   * server); a server that cannot be read is skipped.
+   */
+  public static async getUsersWithServerAccess(
+    adminToken: string
+  ): Promise<PlexSharedUser[]> {
+    const users = new Map<string, PlexSharedUser>();
+
+    for (const server of getSettings().allPlexServers) {
+      if (!server.machineId) {
+        continue;
+      }
+
+      const plexTv = new PlexTvAPI(server.ownerToken ?? adminToken);
+      try {
+        if (server.ownerToken) {
+          const owner = await plexTv.getUser();
+          users.set(String(owner.id), {
+            id: String(owner.id),
+            title: owner.title,
+            username: owner.username,
+            email: owner.email,
+            thumb: owner.thumb,
+          });
+        }
+
+        const response = await plexTv.getUsers();
+        for (const user of response.MediaContainer.User ?? []) {
+          if (
+            user.Server?.some((s) => s.$.machineIdentifier === server.machineId)
+          ) {
+            users.set(user.$.id, user.$);
+          }
+        }
+      } catch (e) {
+        logger.error(
+          `Failed to read the users of Plex server ${server.name}: ${e.message}`,
+          { label: 'Plex.tv API' }
+        );
+      }
+    }
+
+    return [...users.values()];
   }
 
   private async fetchWatchlistItemMetadata(watchlistItem: {

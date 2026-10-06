@@ -690,6 +690,21 @@ class Settings {
     ];
   }
 
+  public getPlexServer(id: number): PlexServerSettings | undefined {
+    return this.allPlexServers.find((server) => server.id === id);
+  }
+
+  public setPlexServerLibraries(id: number, libraries: Library[]): void {
+    if (id === PRIMARY_PLEX_SERVER_ID) {
+      this.data.plex.libraries = libraries;
+      return;
+    }
+    const server = this.data.plexServers.find((s) => s.id === id);
+    if (server) {
+      server.libraries = libraries;
+    }
+  }
+
   get jellyfin(): JellyfinSettings {
     return this.data.jellyfin;
   }

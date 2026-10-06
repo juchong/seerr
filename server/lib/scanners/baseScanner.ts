@@ -7,8 +7,9 @@ import {
 import { getRepository } from '@server/datasource';
 import Media from '@server/entity/Media';
 import MediaRequest from '@server/entity/MediaRequest';
+import PlexServerItem from '@server/entity/PlexServerItem';
 import Season from '@server/entity/Season';
-import { getSettings } from '@server/lib/settings';
+import { PRIMARY_PLEX_SERVER_ID, getSettings } from '@server/lib/settings';
 import logger from '@server/logger';
 import AsyncLock from '@server/utils/asyncLock';
 import { randomUUID } from 'crypto';
@@ -16,6 +17,51 @@ import { randomUUID } from 'crypto';
 // Default scan rates (can be overidden)
 const BUNDLE_SIZE = 20;
 const UPDATE_RATE = 4 * 1000;
+
+type RatingKeyField = 'ratingKey' | 'ratingKey4k';
+
+// Rating keys are local to each Plex server. The media row keeps only the
+// primary server's keys; every server's keys are kept in plexServerItems.
+const isPrimaryPlexKey = (plexServerId?: number): boolean =>
+  plexServerId === undefined || plexServerId === PRIMARY_PLEX_SERVER_ID;
+
+/** Records a rating key for its Plex server. Returns true if it changed. */
+const setPlexServerKey = (
+  media: Media,
+  plexServerId: number | undefined,
+  field: RatingKeyField,
+  ratingKey: string | null | undefined
+): boolean => {
+  if (plexServerId === undefined || !ratingKey) {
+    return false;
+  }
+
+  media.plexServerItems ??= [];
+  let item = media.plexServerItems.find((i) => i.serverId === plexServerId);
+  if (!item) {
+    item = new PlexServerItem({ serverId: plexServerId });
+    media.plexServerItems.push(item);
+  }
+
+  if (item[field] === ratingKey) {
+    return false;
+  }
+  item[field] = ratingKey;
+  return true;
+};
+
+/**
+ * Moves the rating keys just set on a new media row into its server's
+ * PlexServerItem, keeping them on the row only for the primary server.
+ */
+const recordNewMediaPlexKeys = (media: Media, plexServerId?: number) => {
+  for (const field of ['ratingKey', 'ratingKey4k'] as const) {
+    setPlexServerKey(media, plexServerId, field, media[field]);
+    if (!isPrimaryPlexKey(plexServerId)) {
+      media[field] = undefined;
+    }
+  }
+};
 
 export type StatusBase = {
   running: boolean;
@@ -39,6 +85,8 @@ interface ProcessOptions {
   is4k?: boolean;
   mediaAddedAt?: Date;
   ratingKey?: string;
+  /** Plex server the rating key comes from (Plex scans only). */
+  plexServerId?: number;
   jellyfinMediaId?: string;
   imdbId?: string;
   serviceId?: number;
@@ -103,6 +151,7 @@ class BaseScanner<T> {
       is4k = false,
       mediaAddedAt,
       ratingKey,
+      plexServerId,
       jellyfinMediaId,
       imdbId,
       serviceId,
@@ -153,9 +202,21 @@ class BaseScanner<T> {
 
         if (
           ratingKey &&
+          isPrimaryPlexKey(plexServerId) &&
           existing[is4k ? 'ratingKey4k' : 'ratingKey'] !== ratingKey
         ) {
           existing[is4k ? 'ratingKey4k' : 'ratingKey'] = ratingKey;
+          changedExisting = true;
+        }
+
+        if (
+          setPlexServerKey(
+            existing,
+            plexServerId,
+            is4k ? 'ratingKey4k' : 'ratingKey',
+            ratingKey
+          )
+        ) {
           changedExisting = true;
         }
 
@@ -249,6 +310,7 @@ class BaseScanner<T> {
           newMedia.ratingKey4k =
             is4k && this.enable4kMovie ? ratingKey : undefined;
         }
+        recordNewMediaPlexKeys(newMedia, plexServerId);
 
         if (jellyfinMediaId) {
           newMedia.jellyfinMediaId = !is4k ? jellyfinMediaId : undefined;
@@ -279,6 +341,7 @@ class BaseScanner<T> {
     {
       mediaAddedAt,
       ratingKey,
+      plexServerId,
       jellyfinMediaId,
       serviceId,
       externalServiceId,
@@ -319,17 +382,31 @@ class BaseScanner<T> {
         );
 
         // We update the rating keys and jellyfinMediaId in the seasons loop because we need episode counts
-        if (media && season.episodes > 0 && media.ratingKey !== ratingKey) {
+        if (
+          media &&
+          season.episodes > 0 &&
+          isPrimaryPlexKey(plexServerId) &&
+          media.ratingKey !== ratingKey
+        ) {
           media.ratingKey = ratingKey;
+        }
+
+        if (media && season.episodes > 0) {
+          setPlexServerKey(media, plexServerId, 'ratingKey', ratingKey);
         }
 
         if (
           media &&
           season.episodes4k > 0 &&
           this.enable4kShow &&
+          isPrimaryPlexKey(plexServerId) &&
           media.ratingKey4k !== ratingKey
         ) {
           media.ratingKey4k = ratingKey;
+        }
+
+        if (media && season.episodes4k > 0 && this.enable4kShow) {
+          setPlexServerKey(media, plexServerId, 'ratingKey4k', ratingKey);
         }
 
         if (
@@ -643,6 +720,7 @@ class BaseScanner<T> {
                   ? MediaStatus.PROCESSING
                   : MediaStatus.UNKNOWN,
         });
+        recordNewMediaPlexKeys(newMedia, plexServerId);
         await mediaRepository.save(newMedia);
         this.log(`Saved ${title}`);
       }

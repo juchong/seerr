@@ -89,6 +89,31 @@ describe('PlexServerItem', () => {
     );
   });
 
+  it("clears every server's keys with the title's service data", () => {
+    const media = new Media({
+      ratingKey: 'a',
+      ratingKey4k: 'a4k',
+      plexServerItems: [
+        new PlexServerItem({ serverId: 1, ratingKey: 'a', ratingKey4k: 'a4k' }),
+        new PlexServerItem({ serverId: 2, ratingKey: 'b', ratingKey4k: 'b4k' }),
+      ],
+    });
+    const keys = () =>
+      media.plexServerItems.map((item) => [item.ratingKey, item.ratingKey4k]);
+
+    media.resetServiceData(false);
+    assert.deepEqual(keys(), [
+      [null, 'a4k'],
+      [null, 'b4k'],
+    ]);
+
+    media.resetServiceData(true);
+    assert.deepEqual(keys(), [
+      [null, null],
+      [null, null],
+    ]);
+  });
+
   it("deletes a title's rows with the title", async () => {
     const media = await getRepository(Media).findOneOrFail({
       where: { tmdbId: 10 },

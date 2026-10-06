@@ -251,6 +251,7 @@ class Media {
       this.externalServiceSlug = null;
       this.ratingKey = null;
       this.jellyfinMediaId = null;
+      this.plexServerItems?.forEach((item) => (item.ratingKey = null));
     }
     if (is4k === undefined || is4k) {
       this.serviceId4k = null;
@@ -258,6 +259,7 @@ class Media {
       this.externalServiceSlug4k = null;
       this.ratingKey4k = null;
       this.jellyfinMediaId4k = null;
+      this.plexServerItems?.forEach((item) => (item.ratingKey4k = null));
     }
   }
 

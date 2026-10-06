@@ -43,6 +43,7 @@ import { URL } from 'url';
 import { z } from 'zod';
 import metadataRoutes from './metadata';
 import notificationRoutes from './notifications';
+import plexServerRoutes from './plexServers';
 import radarrRoutes from './radarr';
 import sonarrRoutes from './sonarr';
 
@@ -234,6 +235,8 @@ settingsRoutes.get('/plex/devices/servers', async (req, res, next) => {
     });
   }
 });
+
+settingsRoutes.use('/plex/servers', plexServerRoutes);
 
 settingsRoutes.get('/plex/library', (_req, res) => {
   const settings = getSettings();
@@ -543,9 +546,9 @@ settingsRoutes.get(
         select: { id: true, plexToken: true },
         where: { id: 1 },
       });
-      const plexApi = new PlexTvAPI(admin.plexToken ?? '');
-      const plexUsers = (await plexApi.getUsers()).MediaContainer.User.map(
-        (user) => user.$
+      // Everyone shared on (or owning) any configured Plex server.
+      const plexUsers = (
+        await PlexTvAPI.getUsersWithServerAccess(admin.plexToken ?? '')
       ).filter((user) => user.email);
 
       const unimportedPlexUsers: {
@@ -568,20 +571,17 @@ settingsRoutes.get(
         .orWhere('user.email IN (:...plexEmails)', { plexEmails })
         .getMany();
 
-      await Promise.all(
-        plexUsers.map(async (plexUser) => {
-          if (
-            !existingUsers.find(
-              (user) =>
-                user.plexId === parseInt(plexUser.id) ||
-                user.email === plexUser.email.toLowerCase()
-            ) &&
-            (await plexApi.checkUserAccess(parseInt(plexUser.id)))
-          ) {
-            unimportedPlexUsers.push(plexUser);
-          }
-        })
-      );
+      for (const plexUser of plexUsers) {
+        if (
+          !existingUsers.find(
+            (user) =>
+              user.plexId === parseInt(plexUser.id) ||
+              user.email === plexUser.email.toLowerCase()
+          )
+        ) {
+          unimportedPlexUsers.push(plexUser);
+        }
+      }
 
       return res.status(200).json(sortBy(unimportedPlexUsers, 'username'));
     } catch (e) {

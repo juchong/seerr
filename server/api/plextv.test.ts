@@ -3,6 +3,7 @@ import PlexTvAPI, {
   type PlexWatchlistCache,
 } from '@server/api/plextv';
 import cacheManager from '@server/lib/cache';
+import { getSettings } from '@server/lib/settings';
 import type {
   AxiosAdapter,
   AxiosInstance,
@@ -428,5 +429,107 @@ describe('PlexTvAPI.getWatchlist', () => {
         },
       ],
     });
+  });
+});
+
+describe('PlexTvAPI.getUsersWithServerAccess', () => {
+  const tokenOf = (api: PlexTvAPI) =>
+    (api as unknown as { authToken: string }).authToken;
+  const shared = (id: string, machineIds: string[]) => ({
+    $: {
+      id,
+      title: `user${id}`,
+      username: `user${id}`,
+      email: `user${id}@seerr.dev`,
+      thumb: '',
+    },
+    Server: machineIds.map((machineIdentifier) => ({
+      $: { machineIdentifier },
+    })),
+  });
+  const owner = (id: number) => ({
+    id,
+    title: `owner${id}`,
+    username: `owner${id}`,
+    email: `owner${id}@seerr.dev`,
+    thumb: '',
+  });
+
+  let usersByToken: Record<string, ReturnType<typeof shared>[] | Error>;
+
+  beforeEach(() => {
+    const settings = getSettings();
+    settings.plex = { ...settings.plex, machineId: 'machine-a' };
+    settings.plexServers = [
+      {
+        id: 2,
+        name: 'Server B',
+        machineId: 'machine-b',
+        ip: 'plex-b',
+        port: 32400,
+        libraries: [],
+        ownerToken: 'owner-b',
+      },
+    ];
+    mock.method(
+      PlexTvAPI.prototype,
+      'getUsers',
+      async function (this: PlexTvAPI) {
+        const users = usersByToken[tokenOf(this)];
+        if (users instanceof Error) {
+          throw users;
+        }
+        return { MediaContainer: { User: users ?? [] } };
+      }
+    );
+    mock.method(
+      PlexTvAPI.prototype,
+      'getUser',
+      async function (this: PlexTvAPI) {
+        return tokenOf(this) === 'owner-b' ? owner(30) : owner(1);
+      }
+    );
+  });
+
+  afterEach(() => {
+    mock.restoreAll();
+    getSettings().plexServers = [];
+  });
+
+  it("lists users shared on any configured server, read with that server's token", async () => {
+    usersByToken = {
+      admin: [
+        shared('10', ['machine-a']),
+        shared('11', ['machine-c']),
+        shared('12', ['machine-a', 'machine-b']),
+      ],
+      'owner-b': [
+        shared('20', ['machine-b']),
+        shared('12', ['machine-b']),
+        // On server B's owner's list, but shared on another server.
+        shared('21', ['machine-a']),
+      ],
+    };
+
+    const users = await PlexTvAPI.getUsersWithServerAccess('admin');
+
+    // 30 is server B's owner.
+    assert.deepEqual(users.map((user) => user.id).sort(), [
+      '10',
+      '12',
+      '20',
+      '30',
+    ]);
+  });
+
+  it('skips a server whose users cannot be read', async () => {
+    usersByToken = {
+      admin: new Error('plex.tv unavailable'),
+      'owner-b': [shared('20', ['machine-b'])],
+    };
+
+    const users = await PlexTvAPI.getUsersWithServerAccess('admin');
+
+    assert.deepEqual(users.map((user) => user.id).sort(), ['20', '30']);
   });
 });

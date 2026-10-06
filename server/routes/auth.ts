@@ -120,8 +120,6 @@ authRoutes.post('/plex', async (req, res, next) => {
         select: { id: true, plexToken: true, plexId: true, email: true },
         where: { id: 1 },
       });
-      const mainPlexTv = new PlexTvAPI(mainUser.plexToken ?? '');
-
       if (!account.id) {
         logger.error('Plex ID was missing from Plex.tv response', {
           label: 'API',
@@ -139,7 +137,9 @@ authRoutes.post('/plex', async (req, res, next) => {
       if (
         account.id === mainUser.plexId ||
         (account.email === mainUser.email && !mainUser.plexId) ||
-        (await mainPlexTv.checkUserAccess(account.id))
+        (
+          await PlexTvAPI.getUsersWithServerAccess(mainUser.plexToken ?? '')
+        ).some((plexUser) => parseInt(plexUser.id) === account.id)
       ) {
         if (user) {
           if (!user.plexId) {

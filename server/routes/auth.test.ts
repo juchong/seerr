@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
-import { before, beforeEach, describe, it, mock } from 'node:test';
+import { afterEach, before, beforeEach, describe, it, mock } from 'node:test';
 
 import JellyfinAPI from '@server/api/jellyfin';
+import PlexTvAPI from '@server/api/plextv';
 import { ApiErrorCode } from '@server/constants/error';
 import { MediaServerType } from '@server/constants/server';
 import { UserType } from '@server/constants/user';
@@ -925,5 +926,102 @@ describe('POST /auth/reset-password/:guid', () => {
       .post(`/auth/reset-password/${guid}`)
       .send({ password: 'anotherpassword' });
     assert.strictEqual(second.status, 500);
+  });
+});
+
+describe('POST /auth/plex with multiple Plex servers', () => {
+  const tokenOf = (api: PlexTvAPI) =>
+    (api as unknown as { authToken: string }).authToken;
+  const account = (id: number, token: string) => ({
+    id,
+    email: `plex${id}@seerr.dev`,
+    username: `plex${id}`,
+    title: `plex${id}`,
+    thumb: '',
+    authToken: token,
+  });
+  // plex.tv account behind each token: 1234 is the seeded admin.
+  const accounts: Record<string, ReturnType<typeof account>> = {
+    '1234': account(1, '1234'),
+    'owner-b': account(30, 'owner-b'),
+    'user-b': account(500, 'user-b'),
+    stranger: account(600, 'stranger'),
+  };
+  const sharedOn = (id: number, machineIdentifier: string) => ({
+    $: {
+      id: String(id),
+      title: `plex${id}`,
+      username: `plex${id}`,
+      email: `plex${id}@seerr.dev`,
+      thumb: '',
+    },
+    Server: [{ $: { machineIdentifier } }],
+  });
+  // Shared-user list of each server owner.
+  const sharedUsers: Record<string, ReturnType<typeof sharedOn>[]> = {
+    '1234': [sharedOn(700, 'machine-a')],
+    'owner-b': [sharedOn(500, 'machine-b'), sharedOn(600, 'machine-c')],
+  };
+
+  beforeEach(() => {
+    const settings = getSettings();
+    settings.main.mediaServerType = MediaServerType.PLEX;
+    settings.main.mediaServerLogin = true;
+    settings.main.newPlexLogin = true;
+    settings.plex = { ...settings.plex, machineId: 'machine-a' };
+    settings.plexServers = [
+      {
+        id: 2,
+        name: 'Server B',
+        machineId: 'machine-b',
+        ip: 'plex-b',
+        port: 32400,
+        libraries: [],
+        ownerToken: 'owner-b',
+      },
+    ];
+    mock.method(
+      PlexTvAPI.prototype,
+      'getUser',
+      async function (this: PlexTvAPI) {
+        return accounts[tokenOf(this)];
+      }
+    );
+    mock.method(
+      PlexTvAPI.prototype,
+      'getUsers',
+      async function (this: PlexTvAPI) {
+        return { MediaContainer: { User: sharedUsers[tokenOf(this)] ?? [] } };
+      }
+    );
+  });
+
+  afterEach(() => {
+    mock.restoreAll();
+    getSettings().plexServers = [];
+  });
+
+  it('signs in a user shared only on an additional server', async () => {
+    const res = await request(app)
+      .post('/auth/plex')
+      .send({ authToken: 'user-b' });
+
+    assert.strictEqual(res.status, 200);
+    const user = await getRepository(User).findOneOrFail({
+      where: { plexId: 500 },
+    });
+    assert.strictEqual(user.plexUsername, 'plex500');
+  });
+
+  it('refuses a user shared on no configured server', async () => {
+    const res = await request(app)
+      .post('/auth/plex')
+      .send({ authToken: 'stranger' });
+
+    assert.strictEqual(res.status, 403);
+    assert.strictEqual(
+      await getRepository(User).count({ where: { plexId: 600 } }),
+      0
+    );
   });
 });

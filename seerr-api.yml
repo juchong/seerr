@@ -356,6 +356,61 @@ components:
         - machineId
         - ip
         - port
+    PlexServer:
+      type: object
+      description: An additional Plex server (ids 2 and up). The primary server is in PlexSettings.
+      properties:
+        id:
+          type: number
+          example: 2
+          readOnly: true
+        name:
+          type: string
+          example: 'Second Server'
+          readOnly: true
+        machineId:
+          type: string
+          example: '1234123412341234'
+          readOnly: true
+        ip:
+          type: string
+          example: '127.0.0.1'
+        port:
+          type: number
+          example: 32400
+        useSsl:
+          type: boolean
+          nullable: true
+        webAppUrl:
+          type: string
+          nullable: true
+        libraries:
+          type: array
+          readOnly: true
+          items:
+            $ref: '#/components/schemas/PlexLibrary'
+        hasOwnerToken:
+          type: boolean
+          readOnly: true
+    PlexServerRequest:
+      type: object
+      properties:
+        ip:
+          type: string
+          example: '127.0.0.1'
+        port:
+          type: number
+          example: 32400
+        useSsl:
+          type: boolean
+        webAppUrl:
+          type: string
+        ownerToken:
+          type: string
+          description: plex.tv token of the server's owner. Required when adding a server; never returned.
+      required:
+        - ip
+        - port
     PlexConnection:
       type: object
       properties:
@@ -2573,6 +2628,163 @@ paths:
       responses:
         '200':
           description: 'Plex libraries returned'
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PlexLibrary'
+  /settings/plex/servers:
+    get:
+      summary: Get additional Plex servers
+      description: Returns the additional Plex servers. Owner tokens are not included.
+      tags:
+        - settings
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PlexServer'
+    post:
+      summary: Add a Plex server
+      description: Adds a Plex server owned by the plex.tv account of `ownerToken`.
+      tags:
+        - settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlexServerRequest'
+      responses:
+        '201':
+          description: Server added
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlexServer'
+        '400':
+          description: Invalid request body, or the token's account does not own the server
+        '409':
+          description: Server already configured
+  /settings/plex/servers/{serverId}:
+    put:
+      summary: Update a Plex server
+      description: Updates an additional Plex server. Omit `ownerToken` to keep the current one.
+      tags:
+        - settings
+      parameters:
+        - in: path
+          name: serverId
+          required: true
+          schema:
+            type: number
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlexServerRequest'
+      responses:
+        '200':
+          description: Server updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlexServer'
+        '404':
+          description: Server does not exist
+    delete:
+      summary: Remove a Plex server
+      description: Removes an additional Plex server and its stored rating keys.
+      tags:
+        - settings
+      parameters:
+        - in: path
+          name: serverId
+          required: true
+          schema:
+            type: number
+      responses:
+        '204':
+          description: Server removed
+        '404':
+          description: Server does not exist
+  /settings/plex/servers/{serverId}/library:
+    get:
+      summary: Get a Plex server's libraries
+      tags:
+        - settings
+      parameters:
+        - in: path
+          name: serverId
+          required: true
+          schema:
+            type: number
+      responses:
+        '200':
+          description: Plex libraries returned
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PlexLibrary'
+  /settings/plex/servers/{serverId}/library/{libraryId}:
+    put:
+      summary: Update a library of a Plex server
+      tags:
+        - settings
+      parameters:
+        - in: path
+          name: serverId
+          required: true
+          schema:
+            type: number
+        - in: path
+          name: libraryId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - enabled
+              properties:
+                enabled:
+                  type: boolean
+      responses:
+        '200':
+          description: Plex library returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlexLibrary'
+        '404':
+          description: Library does not exist
+  /settings/plex/servers/{serverId}/library/sync:
+    post:
+      summary: Sync a Plex server's libraries
+      description: Syncs the stored libraries with the Plex server. Enabled flags are preserved.
+      tags:
+        - settings
+      parameters:
+        - in: path
+          name: serverId
+          required: true
+          schema:
+            type: number
+      responses:
+        '200':
+          description: Plex libraries returned
           content:
             application/json:
               schema:

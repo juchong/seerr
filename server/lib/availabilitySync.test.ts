@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { beforeEach, describe, it } from 'node:test';
+import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
 
 import type {
   JellyfinLibraryItem,
@@ -26,12 +26,14 @@ import { MediaServerType } from '@server/constants/server';
 import { getRepository } from '@server/datasource';
 import Media from '@server/entity/Media';
 import MediaRequest from '@server/entity/MediaRequest';
+import PlexServerItem from '@server/entity/PlexServerItem';
 import Season from '@server/entity/Season';
 import { User } from '@server/entity/User';
 import availabilitySync from '@server/lib/availabilitySync';
 import type { RadarrSettings, SonarrSettings } from '@server/lib/settings';
 import { getSettings } from '@server/lib/settings';
 import { setupTestDb } from '@server/test/db';
+import type { AxiosInstance } from 'axios';
 
 // --- Mock JellyfinAPI ---
 let getSystemInfoImpl: () => Promise<Record<string, unknown>> = async () => ({
@@ -2314,5 +2316,216 @@ describe('AvailabilitySync', () => {
         'Show should stay AVAILABLE when only specials were removed'
       );
     });
+  });
+});
+
+describe('AvailabilitySync - multiple Plex servers', () => {
+  // Rating keys are local to each Plex server, so this mock answers per
+  // server (by the client's base URL), not by key alone.
+  const PLEX_A = 'http://plex-a:32400';
+  const PLEX_B = 'http://plex-b:32400';
+  let serverItems: Record<string, Record<string, PlexMetadata>>;
+  let serverChildren: Record<string, Record<string, PlexMetadata[]>>;
+
+  const originalGetMetadata = Object.getOwnPropertyDescriptor(
+    PlexAPI.prototype,
+    'getMetadata'
+  ) as PropertyDescriptor;
+  const originalGetChildrenMetadata = Object.getOwnPropertyDescriptor(
+    PlexAPI.prototype,
+    'getChildrenMetadata'
+  ) as PropertyDescriptor;
+  const baseUrl = (api: PlexAPI): string =>
+    (api as unknown as { axios: AxiosInstance }).axios.defaults.baseURL ?? '';
+
+  const movie = (ratingKey: string) =>
+    ({ ratingKey, Media: [{ width: 1920 }] }) as unknown as PlexMetadata;
+
+  before(() => {
+    Object.defineProperty(PlexAPI.prototype, 'getMetadata', {
+      get() {
+        const url = baseUrl(this);
+        return async (key: string) => {
+          const item = serverItems[url]?.[key];
+          if (!item) {
+            throw new Error('Request failed with status code 404');
+          }
+          return item;
+        };
+      },
+      set() {},
+      configurable: true,
+    });
+    Object.defineProperty(PlexAPI.prototype, 'getChildrenMetadata', {
+      get() {
+        const url = baseUrl(this);
+        return async (key: string) => serverChildren[url]?.[key] ?? [];
+      },
+      set() {},
+      configurable: true,
+    });
+  });
+
+  after(() => {
+    Object.defineProperty(
+      PlexAPI.prototype,
+      'getMetadata',
+      originalGetMetadata
+    );
+    Object.defineProperty(
+      PlexAPI.prototype,
+      'getChildrenMetadata',
+      originalGetChildrenMetadata
+    );
+  });
+
+  beforeEach(() => {
+    serverItems = { [PLEX_A]: {}, [PLEX_B]: {} };
+    serverChildren = { [PLEX_A]: {}, [PLEX_B]: {} };
+    configurePlex();
+    const settings = getSettings();
+    settings.radarr = [];
+    settings.sonarr = [];
+    settings.plex = {
+      ...settings.plex,
+      ip: 'plex-a',
+      port: 32400,
+      useSsl: false,
+      machineId: 'machine-a',
+    };
+    settings.plexServers = [
+      {
+        id: 2,
+        name: 'Server B',
+        machineId: 'machine-b',
+        ip: 'plex-b',
+        port: 32400,
+        useSsl: false,
+        libraries: [],
+        ownerToken: 'owner-b-token',
+      },
+    ];
+  });
+
+  afterEach(() => {
+    getSettings().plexServers = [];
+  });
+
+  it('keeps a movie that is only on an additional server', async () => {
+    await getRepository(Media).save(
+      new Media({
+        tmdbId: 7001,
+        mediaType: MediaType.MOVIE,
+        status: MediaStatus.AVAILABLE,
+        plexServerItems: [
+          new PlexServerItem({ serverId: 2, ratingKey: 'b-1' }),
+        ],
+      })
+    );
+    serverItems[PLEX_B]['b-1'] = movie('b-1');
+
+    await availabilitySync.run();
+
+    const updated = await getRepository(Media).findOneOrFail({
+      where: { tmdbId: 7001 },
+    });
+    assert.strictEqual(updated.status, MediaStatus.AVAILABLE);
+  });
+
+  it('marks a movie gone from every server as deleted and clears its keys', async () => {
+    await getRepository(Media).save(
+      new Media({
+        tmdbId: 7002,
+        mediaType: MediaType.MOVIE,
+        status: MediaStatus.AVAILABLE,
+        ratingKey: 'a-2',
+        plexServerItems: [
+          new PlexServerItem({ serverId: 1, ratingKey: 'a-2' }),
+          new PlexServerItem({ serverId: 2, ratingKey: 'b-2' }),
+        ],
+      })
+    );
+
+    await availabilitySync.run();
+
+    const updated = await getRepository(Media).findOneOrFail({
+      where: { tmdbId: 7002 },
+    });
+    assert.strictEqual(updated.status, MediaStatus.DELETED);
+    assert.strictEqual(updated.ratingKey, null);
+    assert.deepEqual(
+      updated.plexServerItems.map((item) => item.ratingKey),
+      [null, null]
+    );
+  });
+
+  it("does not look up one server's rating key on another server", async () => {
+    await getRepository(Media).save(
+      new Media({
+        tmdbId: 7003,
+        mediaType: MediaType.MOVIE,
+        status: MediaStatus.AVAILABLE,
+        ratingKey: '100',
+        plexServerItems: [
+          new PlexServerItem({ serverId: 1, ratingKey: '100' }),
+        ],
+      })
+    );
+    // Server B has an unrelated item under the same key.
+    serverItems[PLEX_B]['100'] = movie('100');
+
+    await availabilitySync.run();
+
+    const updated = await getRepository(Media).findOneOrFail({
+      where: { tmdbId: 7003 },
+    });
+    assert.strictEqual(updated.status, MediaStatus.DELETED);
+  });
+
+  it('keeps seasons that are spread across servers', async () => {
+    await getRepository(Media).save(
+      new Media({
+        tmdbId: 7004,
+        tvdbId: 7004,
+        mediaType: MediaType.TV,
+        status: MediaStatus.AVAILABLE,
+        ratingKey: 'show-a',
+        plexServerItems: [
+          new PlexServerItem({ serverId: 1, ratingKey: 'show-a' }),
+          new PlexServerItem({ serverId: 2, ratingKey: 'show-b' }),
+        ],
+        seasons: [1, 2].map(
+          (seasonNumber) =>
+            new Season({
+              seasonNumber,
+              status: MediaStatus.AVAILABLE,
+              status4k: MediaStatus.UNKNOWN,
+            })
+        ),
+      })
+    );
+    // Season 1 is only on server A, season 2 only on server B.
+    serverItems[PLEX_A]['show-a'] = fakePlexShow('show-a');
+    serverChildren[PLEX_A]['show-a'] = [fakePlexSeason(1, 'a-s1')];
+    serverChildren[PLEX_A]['a-s1'] = fakePlexEpisodes(10);
+    serverItems[PLEX_B]['show-b'] = fakePlexShow('show-b');
+    serverChildren[PLEX_B]['show-b'] = [fakePlexSeason(2, 'b-s2')];
+    serverChildren[PLEX_B]['b-s2'] = fakePlexEpisodes(10);
+
+    await availabilitySync.run();
+
+    const updated = await getRepository(Media).findOneOrFail({
+      where: { tmdbId: 7004 },
+    });
+    assert.deepEqual(
+      updated.seasons
+        .map((season) => [season.seasonNumber, season.status])
+        .sort(),
+      [
+        [1, MediaStatus.AVAILABLE],
+        [2, MediaStatus.AVAILABLE],
+      ]
+    );
+    assert.strictEqual(updated.status, MediaStatus.AVAILABLE);
   });
 });
