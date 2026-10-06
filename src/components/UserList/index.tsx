@@ -6,6 +6,7 @@ import Header from '@app/components/Common/Header';
 import LoadingSpinner from '@app/components/Common/LoadingSpinner';
 import Modal from '@app/components/Common/Modal';
 import PageTitle from '@app/components/Common/PageTitle';
+import PlexServerBadge from '@app/components/Common/PlexServerBadge';
 import SensitiveInput from '@app/components/Common/SensitiveInput';
 import Table from '@app/components/Common/Table';
 import BulkEditModal from '@app/components/UserList/BulkEditModal';
@@ -52,6 +53,7 @@ const messages = defineMessages('components.UserList', {
   user: 'User',
   totalrequests: 'Requests',
   accounttype: 'Type',
+  server: 'Server',
   role: 'Role',
   created: 'Joined',
   bulkedit: 'Bulk Edit',
@@ -146,6 +148,8 @@ const UserList = () => {
     }`,
     { keepPreviousData: true }
   );
+  // The API adds plexServers only when more than one Plex server exists.
+  const showServers = data?.results.some((user) => user.plexServers);
 
   const handleSortChange = (sortKey: Sort) => {
     if (currentSort === sortKey) {
@@ -789,6 +793,9 @@ const UserList = () => {
             >
               {intl.formatMessage(messages.accounttype)}
             </SortableColumnHeader>
+            {showServers && (
+              <Table.TH>{intl.formatMessage(messages.server)}</Table.TH>
+            )}
             <SortableColumnHeader
               sortKey="role"
               currentSort={currentSort}
@@ -915,6 +922,15 @@ const UserList = () => {
                   </Badge>
                 ) : null}
               </Table.TD>
+              {showServers && (
+                <Table.TD>
+                  <div className="flex flex-wrap gap-1">
+                    {user.plexServers?.map((server) => (
+                      <PlexServerBadge key={server.id} {...server} />
+                    ))}
+                  </div>
+                </Table.TD>
+              )}
               <Table.TD>
                 {user.id === 1
                   ? intl.formatMessage(messages.owner)

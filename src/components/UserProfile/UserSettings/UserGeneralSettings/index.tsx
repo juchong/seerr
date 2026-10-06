@@ -2,6 +2,7 @@ import Badge from '@app/components/Common/Badge';
 import Button from '@app/components/Common/Button';
 import LoadingSpinner from '@app/components/Common/LoadingSpinner';
 import PageTitle from '@app/components/Common/PageTitle';
+import PlexServerBadge from '@app/components/Common/PlexServerBadge';
 import LanguageSelector from '@app/components/LanguageSelector';
 import QuotaSelector from '@app/components/QuotaSelector';
 import RegionSelector from '@app/components/RegionSelector';
@@ -36,6 +37,7 @@ const messages = defineMessages(
     save: 'Save Changes',
     saving: 'Saving…',
     mediaServerUser: '{mediaServerName} User',
+    plexserver: 'Plex Server',
     accounttype: 'Account Type',
     plexuser: 'Plex User',
     localuser: 'Local User',
@@ -267,6 +269,20 @@ const UserGeneralSettings = () => {
                   </div>
                 </div>
               </div>
+              {!!user?.plexServers?.length && (
+                <div className="form-row">
+                  <label className="text-label">
+                    {intl.formatMessage(messages.plexserver)}
+                  </label>
+                  <div className="mb-1 text-sm font-medium leading-5 text-gray-400 sm:mt-2">
+                    <div className="flex max-w-lg flex-wrap items-center gap-1">
+                      {user.plexServers.map((server) => (
+                        <PlexServerBadge key={server.id} {...server} />
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
               <div className="form-row">
                 <label className="text-label">
                   {intl.formatMessage(messages.role)}

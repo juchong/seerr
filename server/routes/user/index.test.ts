@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
-import { before, describe, it } from 'node:test';
+import { afterEach, before, describe, it, mock } from 'node:test';
 
+import PlexTvAPI from '@server/api/plextv';
 import { MediaStatus, MediaType } from '@server/constants/media';
 import { getRepository } from '@server/datasource';
 import Media from '@server/entity/Media';
 import { User } from '@server/entity/User';
 import { Watchlist } from '@server/entity/Watchlist';
+import { resetPlexServerMembership } from '@server/lib/plexServerMembership';
 import { getSettings } from '@server/lib/settings';
 import { checkUser, isAuthenticated } from '@server/middleware/auth';
 import authRoutes from '@server/routes/auth';
@@ -143,5 +145,70 @@ describe('GET /user/:id', () => {
     assert.strictEqual(res.status, 200);
     assert.ok(!('settings' in res.body));
     assertNoCredentials(res.body);
+  });
+});
+
+describe('GET /user/:id Plex servers', () => {
+  afterEach(() => {
+    mock.restoreAll();
+    getSettings().plexServers = [];
+    resetPlexServerMembership();
+  });
+
+  it('lists the Plex servers a user is on when several are configured', async () => {
+    const settings = getSettings();
+    settings.plex = { ...settings.plex, name: 'Server A' };
+    settings.plexServers = [
+      {
+        id: 2,
+        name: 'Server B',
+        machineId: 'machine-b',
+        ip: 'plex-b',
+        port: 32400,
+        libraries: [],
+        ownerToken: 'owner-b',
+      },
+    ];
+    const admin = await getRepository(User).findOneOrFail({
+      where: { email: 'admin@seerr.dev' },
+    });
+    mock.method(PlexTvAPI, 'getUsersWithServerAccess', async () => [
+      {
+        id: String(admin.plexId),
+        title: 'admin',
+        username: 'admin',
+        email: 'admin@seerr.dev',
+        thumb: '',
+        serverIds: [2],
+        serverNames: ['Server B'],
+      },
+    ]);
+
+    const agent = await loginAs('admin@seerr.dev', 'test1234');
+    const res = await agent.get(`/user/${admin.id}`);
+
+    assert.strictEqual(res.status, 200);
+    assert.deepEqual(res.body.plexServers, [
+      { id: 1, name: 'Server A' },
+      { id: 2, name: 'Server B' },
+    ]);
+  });
+
+  it('leaves Plex servers out with a single Plex server', async () => {
+    const lookup = mock.method(
+      PlexTvAPI,
+      'getUsersWithServerAccess',
+      async () => []
+    );
+    const admin = await getRepository(User).findOneOrFail({
+      where: { email: 'admin@seerr.dev' },
+    });
+
+    const agent = await loginAs('admin@seerr.dev', 'test1234');
+    const res = await agent.get(`/user/${admin.id}`);
+
+    assert.strictEqual(res.status, 200);
+    assert.ok(!('plexServers' in res.body));
+    assert.strictEqual(lookup.mock.callCount(), 0);
   });
 });

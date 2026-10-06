@@ -7,6 +7,10 @@ import { getRepository } from '@server/datasource';
 import { User } from '@server/entity/User';
 import { startJobs } from '@server/job/schedule';
 import { Permission } from '@server/lib/permissions';
+import {
+  getPlexServerMembership,
+  plexServersOf,
+} from '@server/lib/plexServerMembership';
 import { getSettings } from '@server/lib/settings';
 import logger from '@server/logger';
 import { isAuthenticated } from '@server/middleware/auth';
@@ -63,6 +67,7 @@ authRoutes.get('/me', isAuthenticated(), async (req, res) => {
       watchlistSyncMovies: user.settings.watchlistSyncMovies,
       watchlistSyncTv: user.settings.watchlistSyncTv,
     },
+    plexServers: plexServersOf(await getPlexServerMembership(), user.plexId),
   });
 });
 

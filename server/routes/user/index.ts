@@ -18,6 +18,10 @@ import type {
   UserWatchDataResponse,
 } from '@server/interfaces/api/userInterfaces';
 import { Permission, hasPermission } from '@server/lib/permissions';
+import {
+  getPlexServerMembership,
+  plexServersOf,
+} from '@server/lib/plexServerMembership';
 import { getSettings } from '@server/lib/settings';
 import logger from '@server/logger';
 import { isAuthenticated } from '@server/middleware/auth';
@@ -149,6 +153,7 @@ router.get('/', async (req, res, next) => {
       .skip(skip)
       .distinct(true)
       .getManyAndCount();
+    const membership = await getPlexServerMembership();
 
     return res.status(200).json({
       pageInfo: {
@@ -157,10 +162,10 @@ router.get('/', async (req, res, next) => {
         results: userCount,
         page: Math.ceil(skip / pageSize) + 1,
       },
-      results: User.filterMany(
-        users,
-        req.user?.hasPermission(Permission.MANAGE_USERS)
-      ),
+      results: users.map((user) => ({
+        ...user.filter(req.user?.hasPermission(Permission.MANAGE_USERS)),
+        plexServers: plexServersOf(membership, user.plexId),
+      })),
     } as UserResultsResponse);
   } catch (e) {
     next({ status: 500, message: e.message });
@@ -412,7 +417,10 @@ router.get<{ id: string }>('/:id', async (req, res, next) => {
     const isOwnProfile = req.user?.id === user.id;
     const isAdmin = req.user?.hasPermission(Permission.MANAGE_USERS);
 
-    return res.status(200).json(user.filter(isOwnProfile || isAdmin));
+    return res.status(200).json({
+      ...user.filter(isOwnProfile || isAdmin),
+      plexServers: plexServersOf(await getPlexServerMembership(), user.plexId),
+    });
   } catch {
     next({ status: 404, message: 'User not found.' });
   }

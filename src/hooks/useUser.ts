@@ -24,6 +24,8 @@ export interface User {
   updatedAt: Date;
   requestCount: number;
   settings?: UserSettings;
+  /** Set only when more than one Plex server is configured. */
+  plexServers?: { id: number; name: string }[];
 }
 
 type NotificationAgentTypes = Record<NotificationAgentKey, number>;

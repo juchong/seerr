@@ -92,7 +92,10 @@ export interface PlexSharedUser {
 }
 
 /** A plex.tv user and the configured Plex servers they can use. */
-export type PlexServerUser = PlexSharedUser & { serverNames: string[] };
+export type PlexServerUser = PlexSharedUser & {
+  serverIds: number[];
+  serverNames: string[];
+};
 
 interface UsersResponse {
   MediaContainer: {
@@ -346,9 +349,14 @@ class PlexTvAPI extends ExternalAPI {
       const add = (user: PlexSharedUser) => {
         const existing = users.get(user.id);
         if (existing) {
+          existing.serverIds.push(server.id);
           existing.serverNames.push(server.name);
         } else {
-          users.set(user.id, { ...user, serverNames: [server.name] });
+          users.set(user.id, {
+            ...user,
+            serverIds: [server.id],
+            serverNames: [server.name],
+          });
         }
       };
       try {

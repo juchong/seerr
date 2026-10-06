@@ -1,5 +1,6 @@
 import Alert from '@app/components/Common/Alert';
 import Modal from '@app/components/Common/Modal';
+import PlexServerBadge from '@app/components/Common/PlexServerBadge';
 import useSettings from '@app/hooks/useSettings';
 import useToasts from '@app/hooks/useToasts';
 import globalMessages from '@app/i18n/globalMessages';
@@ -53,6 +54,7 @@ const PlexImportModal = ({ onCancel, onComplete }: PlexImportProps) => {
       username: string;
       email: string;
       thumb: string;
+      serverIds?: number[];
       serverNames?: string[];
     }[]
   >(`/api/v1/settings/plex/users`, {
@@ -292,7 +294,15 @@ const PlexImportModal = ({ onCancel, onComplete }: PlexImportProps) => {
                           </td>
                           {showServers && (
                             <td className="whitespace-nowrap px-1 py-4 text-sm leading-5 text-gray-300 md:px-6">
-                              {user.serverNames?.join(', ')}
+                              <div className="flex flex-wrap gap-1">
+                                {user.serverIds?.map((id, i) => (
+                                  <PlexServerBadge
+                                    key={id}
+                                    id={id}
+                                    name={user.serverNames?.[i] ?? ''}
+                                  />
+                                ))}
+                              </div>
                             </td>
                           )}
                         </tr>
