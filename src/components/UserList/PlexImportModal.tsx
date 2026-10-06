@@ -58,9 +58,11 @@ const PlexImportModal = ({ onCancel, onComplete }: PlexImportProps) => {
   >(`/api/v1/settings/plex/users`, {
     revalidateOnMount: true,
   });
-  // Only worth a column when users come from more than one Plex server.
-  const showServers =
-    new Set(data?.flatMap((user) => user.serverNames ?? [])).size > 1;
+  // The server column only matters once additional Plex servers exist.
+  const { data: additionalServers } = useSWR<unknown[]>(
+    '/api/v1/settings/plex/servers'
+  );
+  const showServers = (additionalServers?.length ?? 0) > 0;
 
   const importUsers = async () => {
     setImporting(true);

@@ -48,10 +48,20 @@ const identifyOwnedServer = async (
   address: z.infer<typeof serverBodySchema>,
   ownerToken: string
 ): Promise<{ machineId: string; name: string }> => {
-  const status = await new PlexAPI({
-    plexToken: ownerToken,
-    plexSettings: { ...address, name: '', libraries: [] },
-  }).getStatus();
+  let status: Awaited<ReturnType<PlexAPI['getStatus']>>;
+  try {
+    status = await new PlexAPI({
+      plexToken: ownerToken,
+      plexSettings: { ...address, name: '', libraries: [] },
+    }).getStatus();
+  } catch (e) {
+    // The server itself refuses accounts that neither own it nor are
+    // shared on it.
+    if (e.response?.status === 401) {
+      throw new NotOwnerError('Token is refused by the server');
+    }
+    throw e;
+  }
   const machineId = status?.MediaContainer?.machineIdentifier;
   if (!machineId) {
     throw new Error('Server not found');

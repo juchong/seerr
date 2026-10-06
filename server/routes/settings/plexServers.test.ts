@@ -57,6 +57,14 @@ describe('/settings/plex/servers', () => {
     settings.plexServers = [];
 
     mock.method(PlexAPI.prototype, 'getStatus', async function (this: PlexAPI) {
+      const headers = (this as unknown as { axios: AxiosInstance }).axios
+        .defaults.headers as unknown as Record<string, string>;
+      // An account with no access to a server gets 401 from the server.
+      if (headers['X-Plex-Token'] === 'stranger') {
+        throw Object.assign(new Error('Request failed with status code 401'), {
+          response: { status: 401 },
+        });
+      }
       const host = new URL(
         (this as unknown as { axios: AxiosInstance }).axios.defaults.baseURL ??
           ''
@@ -114,6 +122,15 @@ describe('/settings/plex/servers', () => {
     const res = await request(app)
       .post('/settings/plex/servers')
       .send({ ip: 'plex-b', port: 32400, ownerToken: 'shared-user' });
+
+    assert.strictEqual(res.status, 400);
+    assert.deepEqual(getSettings().plexServers, []);
+  });
+
+  it('refuses a token that the server itself rejects', async () => {
+    const res = await request(app)
+      .post('/settings/plex/servers')
+      .send({ ip: 'plex-b', port: 32400, ownerToken: 'stranger' });
 
     assert.strictEqual(res.status, 400);
     assert.deepEqual(getSettings().plexServers, []);
